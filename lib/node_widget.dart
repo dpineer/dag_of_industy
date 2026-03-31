@@ -53,8 +53,8 @@ class NodeWidget extends ConsumerWidget {
                     Icon(Icons.circle, size: 10, color: node.status.color),
                     const SizedBox(width: 6),
                     Text(
-                      node.name,
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Theme.of(context).textTheme.bodyLarge?.color),
+                      "${node.name} #${node.id.substring(0, 5)}", 
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Theme.of(context).textTheme.bodyLarge?.color),
                     ),
                   ],
                 ),
@@ -109,39 +109,64 @@ class NodeWidget extends ConsumerWidget {
               ],
             ),
           ),
-          // [新增] 底部动态进度条指示器
-          if (node.status != NodeStatus.idle)
-            Container(
-              height: 4,
-              decoration: BoxDecoration(
-                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(6)),
-                color: Colors.grey.shade300,
-              ),
-              alignment: Alignment.centerLeft,
-              child: FractionallySizedBox(
-                widthFactor: node.progress,
-                child: Container(color: node.status.color),
-              ),
-            )
+          // [修复 3] 仓储水位线与进度条分治渲染机制
+          Builder(
+            builder: (context) {
+              double displayProgress = node.progress;
+              
+              // 若为仓储类型的卡片，进度条的数值强制映射为库存占比
+              if (node.category == ProcessCategory.storing) {
+                double totalInv = 0.0;
+                node.inputInventory.values.forEach((v) => totalInv += v);
+                node.outputInventory.values.forEach((v) => totalInv += v);
+                
+                // 防止 maxCapacity 为 0 的除法异常
+                displayProgress = node.maxCapacity > 0 
+                    ? (totalInv / node.maxCapacity).clamp(0.0, 1.0) 
+                    : 0.0;
+              }
+
+              if (node.status != NodeStatus.idle) {
+                return Container(
+                  height: 4,
+                  decoration: BoxDecoration(
+                    borderRadius: const BorderRadius.vertical(bottom: Radius.circular(6)),
+                    color: Colors.grey.shade300,
+                  ),
+                  alignment: Alignment.centerLeft,
+                  child: FractionallySizedBox(
+                    widthFactor: displayProgress, // 替换这里原有的 node.progress
+                    child: Container(
+                      color: node.category == ProcessCategory.storing 
+                          ? Colors.blueAccent // 仓储卡片使用专用的水位颜色，其余沿用 status
+                          : node.status.color,
+                    ),
+                  ),
+                );
+              }
+              return const SizedBox.shrink();
+            }
+          )
         ],
       ),
     );
 
     return GestureDetector(
+      // [Fix] 强制卡片消费内部所有的手势命中测试，防止多卡片交叠时底层画板抢夺焦点导致无法拖拽
+      behavior: HitTestBehavior.opaque, 
       onSecondaryTapDown: (details) => _showContextMenu(context, ref, details.globalPosition),
       onPanUpdate: (details) => ref.read(canvasProvider.notifier).updateNodePosition(node.id, details.delta),
       child: Opacity(
-        opacity: isBlueprint ? 0.6 : 1.0, // 蓝图状态呈现半透明
+        opacity: isBlueprint ? 0.6 : 1.0, 
         child: Stack(
           clipBehavior: Clip.none,
           children:[
-            // 特性4: 绘制底层堆叠阴影 (根据 stackCount 循环生成底层卡片)
             if (node.stackCount > 1)
               for (int i = 1; i < (node.stackCount > 4 ? 4 : node.stackCount); i++)
                 Positioned(
-                  top: i * 4.0, left: i * 4.0, // 制造向右下方的堆叠透视偏移
+                  top: i * 4.0, left: i * 4.0, 
                   child: Container(
-                    width: 250, height: 100, // 高度应与实际卡片一致，此处简写
+                    width: 250, height: 100, 
                     decoration: BoxDecoration(
                       color: Theme.of(context).cardColor.withOpacity(0.5),
                       border: Border.all(color: node.category.themeColor.withOpacity(0.5)),
@@ -153,18 +178,17 @@ class NodeWidget extends ConsumerWidget {
             // 顶层主卡片
             cardContent,
             
-            // 特性4: 堆叠数量控制器徽章
+            // [Fix] 加减UI上移并缩小
             Positioned(
-              top: -10, right: -10,
-              child: _buildStackController(ref),
+              top: -24, 
+              right: -5,
+              child: Transform.scale(
+                scale: 0.8, // 缩小至 80% 避免遮挡下面内容
+                child: _buildStackController(ref),
+              ),
             ),
             
-            // 特性3: 运行状态指示灯
-            if (node.isBuilt)
-              Positioned(
-                top: 5, left: 5,
-                child: Icon(Icons.circle, size: 10, color: node.isRunning ? Colors.green : Colors.red),
-              )
+            // [Fix] 已删除位于此处的第二个 isRunning 状态指示点 (圆点现已统一在卡片 Header 处显示)
           ],
         ),
       ),
@@ -229,6 +253,37 @@ class NodeWidget extends ConsumerWidget {
     );
   }
 
+  // 在 NodeWidget 中新增库存干预菜单方法
+  void _showInventoryIntervention(BuildContext context, WidgetRef ref, String portId, bool isInput, double currentInv) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('物理资源干预', style: TextStyle(fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.delete_sweep, color: Colors.red),
+              title: const Text('排空 (0)'),
+              onTap: () {
+                ref.read(canvasProvider.notifier).setInventory(node.id, portId, isInput, 0.0);
+                Navigator.pop(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.add_box, color: Colors.green),
+              title: const Text('灌注 (+1000)'),
+              onTap: () {
+                ref.read(canvasProvider.notifier).setInventory(node.id, portId, isInput, currentInv + 1000.0);
+                Navigator.pop(context);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildInputPort(BuildContext context, WidgetRef ref, InputPort port) {
     double inv = node.inputInventory[port.id] ?? 0.0;
     // 接收连线的 DragTarget
@@ -254,9 +309,19 @@ class NodeWidget extends ConsumerWidget {
                       "${port.itemName} (${port.rate}/${port.unit}/s)",
                       style: TextStyle(fontSize: 11, color: Theme.of(context).textTheme.bodyMedium?.color),
                     ),
-                    Text(
-                      "存: ${inv.toStringAsFixed(1)} ${port.unit}",
-                      style: const TextStyle(fontSize: 9, color: Colors.blueGrey),
+                    GestureDetector(
+                      onTap: () => _showInventoryIntervention(context, ref, port.id, true, inv),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.blueGrey.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4)
+                        ),
+                        child: Text(
+                          "存: ${inv.toStringAsFixed(1)} ${port.unit}",
+                          style: const TextStyle(fontSize: 10, color: Colors.blueGrey, decoration: TextDecoration.underline),
+                        ),
+                      ),
                     )
                   ],
                 ),
@@ -290,9 +355,19 @@ class NodeWidget extends ConsumerWidget {
                         : (port.isPollutant ? Colors.red.shade400 : Theme.of(context).textTheme.bodyMedium?.color),
                     ),
                   ),
-                  Text(
-                    "存: ${inv.toStringAsFixed(1)} ${port.unit}",
-                    style: const TextStyle(fontSize: 9, color: Colors.blueGrey),
+                  GestureDetector(
+                    onTap: () => _showInventoryIntervention(context, ref, port.id, false, inv),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.blueGrey.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(4)
+                      ),
+                      child: Text(
+                        "存: ${inv.toStringAsFixed(1)} ${port.unit}",
+                        style: const TextStyle(fontSize: 10, color: Colors.blueGrey, decoration: TextDecoration.underline),
+                      ),
+                    ),
                   )
                 ],
               ),

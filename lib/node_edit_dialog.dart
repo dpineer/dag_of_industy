@@ -146,10 +146,11 @@ class _NodeEditDialogState extends ConsumerState<NodeEditDialog> {
                   value: node.logicAction,
                   decoration: const InputDecoration(labelText: '执行指令'),
                   items: const[
-                    DropdownMenuItem(value: 'build', child: Text('建设目标节点')),
-                    DropdownMenuItem(value: 'start', child: Text('启动目标节点')),
-                    DropdownMenuItem(value: 'stop', child: Text('停止目标节点')),
-                    DropdownMenuItem(value: 'dismantle', child: Text('拆除目标节点')),
+                    DropdownMenuItem(value: 'build', child: Text('指令: 建设 (仅激活蓝图)')),
+                    DropdownMenuItem(value: 'stack', child: Text('指令: 增加堆叠 (自动建设)')),
+                    DropdownMenuItem(value: 'start', child: Text('指令: 启动运行')),
+                    DropdownMenuItem(value: 'stop', child: Text('指令: 停止运行')),
+                    DropdownMenuItem(value: 'dismantle', child: Text('指令: 减少堆叠/拆除')),
                   ],
                   onChanged: (val) {
                     final updatedNode = node.copyWith(logicAction: val);

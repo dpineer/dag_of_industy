@@ -49,10 +49,14 @@ class CanvasScreen extends ConsumerWidget {
             icon: const Icon(Icons.add_box),
             tooltip: '添加测试工序',
             onPressed: () {
+              // [Fix] 动态计算偏移量，避免新卡片堆叠在完全相同的物理坐标上导致手势遮挡与瞬间异常碰撞
+              final nodeCount = ref.read(canvasProvider).nodes.length;
+              final double offset = (nodeCount * 40.0) % 400.0; 
+              
               ref.read(canvasProvider.notifier).addNode(ProductionNode(
                 name: '新工序',
                 category: ProcessCategory.reaction,
-                position: const Offset(300, 200),
+                position: Offset(300 + offset, 200 + offset), // 施加阶梯型偏移
                 inputs: [InputPort(itemName: '原料', rate: 10)],
                 outputs:[
                   OutputPort(itemName: '产品', rate: 5),
@@ -125,16 +129,16 @@ class CanvasScreen extends ConsumerWidget {
         minScale: 0.1,
         maxScale: 3.0,
           child: Container(
-            width: 5000,
-            height: 5000,
-            // 【修复调色】: 移除硬编码颜色，跟随暗黑/高亮模式的底层背景色
+            // [Fix] 扩大物理命中区至极大值，彻底解决负坐标拖拽脱离后无法命中的问题
+            width: 100000,
+            height: 100000,
             color: Theme.of(context).scaffoldBackgroundColor, 
             child: Stack(
               clipBehavior: Clip.none,
               children:[
-                // 1. 绘制已连接线段与正在拖拽的活动线段
                 CustomPaint(
-                  size: const Size(5000, 5000),
+                  // [Fix] 同步扩充 CustomPaint 绘制区尺寸
+                  size: const Size(100000, 100000),
                   painter: _ConnectionPainter(
                     nodes: canvasState.nodes,
                     connections: canvasState.connections,
@@ -285,23 +289,26 @@ class _ConnectionPainter extends CustomPainter {
     this.activeDragCurrentPosition,
   });
 
+  // [Feature] 根据物料名称生成确定性且视觉舒适的颜色
+  Color _getColorFromItemName(String itemName) {
+    int hash = itemName.hashCode;
+    int r = (hash & 0xFF0000) >> 16;
+    int g = (hash & 0x00FF00) >> 8;
+    int b = (hash & 0x0000FF);
+    // 约束 RGB 阈值，保证线条在亮/暗色背景下均具备较高对比度与可见性
+    return Color.fromARGB(255, (r % 150) + 70, (g % 150) + 70, (b % 150) + 70);
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.blueGrey
-      ..strokeWidth = 3.0
-      ..style = PaintingStyle.stroke;
-
     final activePaint = Paint()
       ..color = Colors.blueAccent
       ..strokeWidth = 3.0
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
-    // 获取端口在画板上的绝对坐标 (基于卡片布局的偏移推算)
     Offset getPortGlobalOffset(String nodeId, bool isOutput, int portIndex) {
       final node = nodes.firstWhere((n) => n.id == nodeId);
-      // X轴：输入在左(0)，输出在右(250)；Y轴：标题高40 + 端口偏移(约30*index)
       double dx = node.position.dx + (isOutput ? 250 : 0);
       double dy = node.position.dy + 60 + (portIndex * 35);
       return Offset(dx, dy);
@@ -320,15 +327,28 @@ class _ConnectionPainter extends CustomPainter {
 
       final start = getPortGlobalOffset(sNode.id, true, sIndex);
       final end = getPortGlobalOffset(tNode.id, false, tIndex);
+      
+      // [Fix] 获取当前输出端口的物料名称，并为其分配专门的颜色画笔
+      final itemName = sNode.outputs[sIndex].itemName;
+      final paint = Paint()
+        ..color = _getColorFromItemName(itemName)
+        ..strokeWidth = 3.0
+        ..style = PaintingStyle.stroke;
+
       _drawBezierCurve(canvas, start, end, paint);
     }
 
-    // 绘制正在拖拽的连接
+    // 绘制正在拖拽的活动连接
     if (activeSourceNodeId != null && activeDragCurrentPosition != null) {
       final sNode = nodes.firstWhere((n) => n.id == activeSourceNodeId);
-      // 使用状态中的activeDragSourcePortId来确定拖拽的端口
       int sIndex = sNode.outputs.indexWhere((p) => p.id == activeDragSourcePortId); 
       final start = getPortGlobalOffset(sNode.id, true, sIndex != -1 ? sIndex : 0);
+      
+      // 拖拽时可根据源物料动态染色
+      if (sIndex != -1) {
+         activePaint.color = _getColorFromItemName(sNode.outputs[sIndex].itemName);
+      }
+      
       _drawBezierCurve(canvas, start, activeDragCurrentPosition!, activePaint);
     }
   }

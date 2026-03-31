@@ -44,15 +44,15 @@ abstract class Port {
   final String itemName;
   final double rate;
   final double unitCost;
-  final String unit; // [新增] 计量单位
+  final String unit; 
 
   Port({
     String? id,
     required this.itemName,
     this.rate = 1.0,
     this.unitCost = 0.0,
-    this.unit = 'kg', // 默认单位
-  }) : id = id ?? _uuid.v4();
+    this.unit = 'kg', 
+  }) : id = id ?? itemName; // [Fix] 资源名称就是资源的ID，统一全系统物料标定标准
 
   Map<String, dynamic> toJson();
 }
