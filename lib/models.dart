@@ -3,6 +3,44 @@ import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
 
+// [新增] 信号类型：区分数字与模拟
+enum SignalType { digital, analog }
+
+// [新增] 逻辑算子：实现图灵完备的基础
+enum LogicOperator {
+  identity,    // 透传
+  and, or, not, xor, 
+  greater, less, equal,
+  adder,       // 加法器
+  latch,       // 锁存器 (Memory)
+  buffer,      // 缓冲/延时
+  schmidtTrigger // 阈值触发器
+}
+
+// [新增] 信号端口模型
+class SignalPort {
+  final String id;
+  final String name;
+  final SignalType type;
+  double value; // 当前实时信号值
+
+  SignalPort({
+    required this.id,
+    required this.name,
+    this.type = SignalType.digital,
+    this.value = 0.0,
+  });
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'type': type.name, 'value': value};
+  
+  factory SignalPort.fromJson(Map<String, dynamic> json) => SignalPort(
+    id: json['id'],
+    name: json['name'],
+    type: SignalType.values.firstWhere((e) => e.name == json['type']),
+    value: (json['value'] ?? 0.0).toDouble(),
+  );
+}
+
 // [新增] 节点运行时状态机
 enum NodeStatus {
   idle('待机', Colors.grey),
@@ -163,6 +201,12 @@ class ProductionNode {
   final String? conditionPortId;   // [新增] 条件监测端口ID
   final String? conditionTargetNodeId; // [新增] 条件监测目标节点ID
 
+  // [新增] 信号层相关属性
+  final List<SignalPort> signalInputs;
+  final List<SignalPort> signalOutputs;
+  final LogicOperator logicOp;
+  final Map<String, double> registers; // 内部寄存器，用于存储状态 (实现 Latch/Counter)
+
   ProductionNode({
     String? id,
     required this.name,
@@ -188,6 +232,11 @@ class ProductionNode {
     this.conditionValue,
     this.conditionPortId,
     this.conditionTargetNodeId,
+    // [新增] 信号层参数
+    this.signalInputs = const [],
+    this.signalOutputs = const [],
+    this.logicOp = LogicOperator.identity,
+    this.registers = const {},
   }) : id = id ?? _uuid.v4();
 
   ProductionNode copyWith({
@@ -214,6 +263,11 @@ class ProductionNode {
     double? conditionValue,
     String? conditionPortId,
     String? conditionTargetNodeId,
+    // [新增] 信号层参数
+    List<SignalPort>? signalInputs,
+    List<SignalPort>? signalOutputs,
+    LogicOperator? logicOp,
+    Map<String, double>? registers,
   }) {
     return ProductionNode(
       id: id,
@@ -240,6 +294,11 @@ class ProductionNode {
       conditionValue: conditionValue ?? this.conditionValue,
       conditionPortId: conditionPortId ?? this.conditionPortId,
       conditionTargetNodeId: conditionTargetNodeId ?? this.conditionTargetNodeId,
+      // [新增] 信号层参数
+      signalInputs: signalInputs ?? this.signalInputs,
+      signalOutputs: signalOutputs ?? this.signalOutputs,
+      logicOp: logicOp ?? this.logicOp,
+      registers: registers ?? this.registers,
     );
   }
 
@@ -287,12 +346,16 @@ class ProductionNode {
   }
 }
 
+// [更新] Connection 增加类型区分
+enum ConnectionType { material, signal }
+
 class Connection {
   final String id;
   final String sourceNodeId;
   final String sourcePortId;
   final String targetNodeId;
   final String targetPortId;
+  final ConnectionType type; // [新增] 区分物料管线与信号线
 
   Connection({
     String? id,
@@ -300,13 +363,19 @@ class Connection {
     required this.sourcePortId,
     required this.targetNodeId,
     required this.targetPortId,
+    this.type = ConnectionType.material,
   }) : id = id ?? _uuid.v4();
 
   Map<String, dynamic> toJson() => {
-    'id': id, 'sourceNodeId': sourceNodeId, 'sourcePortId': sourcePortId, 'targetNodeId': targetNodeId, 'targetPortId': targetPortId,
+    'id': id, 'sourceNodeId': sourceNodeId, 'sourcePortId': sourcePortId, 'targetNodeId': targetNodeId, 'targetPortId': targetPortId, 'type': type.name,
   };
 
   factory Connection.fromJson(Map<String, dynamic> json) => Connection(
-    id: json['id'], sourceNodeId: json['sourceNodeId'], sourcePortId: json['sourcePortId'], targetNodeId: json['targetNodeId'], targetPortId: json['targetPortId'],
+    id: json['id'], 
+    sourceNodeId: json['sourceNodeId'], 
+    sourcePortId: json['sourcePortId'], 
+    targetNodeId: json['targetNodeId'], 
+    targetPortId: json['targetPortId'],
+    type: ConnectionType.values.firstWhere((e) => e.name == json['type'], orElse: () => ConnectionType.material),
   );
 }

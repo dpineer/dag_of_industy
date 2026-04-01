@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'models.dart';
 import 'providers.dart';
+import 'package:uuid/uuid.dart';
+
+const _uuid = Uuid();
 
 class NodeEditDialog extends ConsumerStatefulWidget {
   final String nodeId;
@@ -213,6 +216,39 @@ class _NodeEditDialogState extends ConsumerState<NodeEditDialog> {
                       _dispatchUpdate(updatedNode);
                     },
                   ),
+              ],
+              
+              // [新增] 逻辑运算器配置
+              if (node.category == ProcessCategory.control) ...[
+                const Divider(),
+                const Text('运算器配置', style: TextStyle(fontWeight: FontWeight.bold)),
+                DropdownButtonFormField<LogicOperator>(
+                  value: node.logicOp,
+                  items: LogicOperator.values.map((op) => DropdownMenuItem(
+                    value: op,
+                    child: Text(op.name.toUpperCase()),
+                  )).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      _dispatchUpdate(node.copyWith(logicOp: val));
+                    }
+                  },
+                ),
+                // 信号端口管理...
+                TextButton(
+                  onPressed: () {
+                    final newIn = [...node.signalInputs, SignalPort(id: _uuid.v4(), name: 'sig_in')];
+                    _dispatchUpdate(node.copyWith(signalInputs: newIn));
+                  },
+                  child: const Text('添加信号输入端口'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    final newOut = [...node.signalOutputs, SignalPort(id: _uuid.v4(), name: 'sig_out')];
+                    _dispatchUpdate(node.copyWith(signalOutputs: newOut));
+                  },
+                  child: const Text('添加信号输出端口'),
+                )
               ],
               
               const Divider(),

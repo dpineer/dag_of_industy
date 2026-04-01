@@ -124,21 +124,37 @@ class CanvasScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: InteractiveViewer(
-        boundaryMargin: const EdgeInsets.all(double.infinity),
-        minScale: 0.1,
-        maxScale: 3.0,
+      body: Container(
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: Colors.black54, // 暗色边框
+            width: 2.0,
+          ),
+        ),
+        child: InteractiveViewer(
+          boundaryMargin: const EdgeInsets.all(200000.0), // 扩大边界限制
+          minScale: 0.1,
+          maxScale: 3.0,
+          constrained: false, // 允许无约束缩放和平移
           child: Container(
             // [Fix] 扩大物理命中区至极大值，彻底解决负坐标拖拽脱离后无法命中的问题
-            width: 100000,
-            height: 100000,
-            color: Theme.of(context).scaffoldBackgroundColor, 
+            width: 200000,
+            height: 200000,
+            decoration: BoxDecoration(
+              color: Theme.of(context).scaffoldBackgroundColor,
+              border: Border.all(
+                color: Theme.of(context).brightness == Brightness.dark 
+                    ? Colors.grey.shade800 
+                    : Colors.grey.shade400,
+                width: 2.0,
+              ),
+            ),
             child: Stack(
               clipBehavior: Clip.none,
               children:[
                 CustomPaint(
                   // [Fix] 同步扩充 CustomPaint 绘制区尺寸
-                  size: const Size(100000, 100000),
+                  size: const Size(200000, 200000),
                   painter: _ConnectionPainter(
                     nodes: canvasState.nodes,
                     connections: canvasState.connections,
@@ -159,6 +175,7 @@ class CanvasScreen extends ConsumerWidget {
               ],
             ),
           ),
+        ),
       ),
     );
   }

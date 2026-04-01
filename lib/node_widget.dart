@@ -72,17 +72,52 @@ class NodeWidget extends ConsumerWidget {
               padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
               margin: const EdgeInsets.only(bottom: 4),
               color: Colors.blueAccent.withOpacity(0.1),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children:[
-                  const Icon(Icons.hub, size: 16, color: Colors.blueAccent),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children:[
-                      Text("目标蓝图: ${node.logicTargetNodeId != null ? node.logicTargetNodeId!.substring(0,6) : '未绑定'}", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-                      Text("控制指令: ${node.logicAction ?? '待配置'}", style: const TextStyle(fontSize: 10, color: Colors.orange)),
+                      const Icon(Icons.hub, size: 16, color: Colors.blueAccent),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children:[
+                          Text("目标蓝图: ${node.logicTargetNodeId != null ? (node.logicTargetNodeId!.length > 6 ? node.logicTargetNodeId!.substring(0,6) : node.logicTargetNodeId!) : '未绑定'}", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                          Text("控制指令: ${node.logicAction ?? '待配置'}", style: const TextStyle(fontSize: 10, color: Colors.orange)),
+                        ],
+                      ),
                     ],
                   ),
+                  // 显示目标节点的建设资源需求
+                  if (node.logicTargetNodeId != null)
+                    Builder(
+                      builder: (context) {
+                        // 查找目标节点（使用双向前缀匹配，兼容短ID和完整ID）
+                        final targetNode = ref.read(canvasProvider).nodes.firstWhere(
+                          (n) => n.id.startsWith(node.logicTargetNodeId!) || node.logicTargetNodeId!.startsWith(n.id), 
+                          orElse: () => node,
+                        );
+                        
+                        // 如果找到目标节点且其有建设成本，则显示目标节点的建设资源
+                        if (targetNode != node && targetNode.constructionCost.isNotEmpty) {
+                          return Container(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text("建设资源:", style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.blue)),
+                                ...targetNode.constructionCost.entries.map((entry) => 
+                                  Text("${entry.key}: ${entry.value}", style: TextStyle(fontSize: 9, color: Colors.blue.shade200))
+                                ),
+                              ],
+                            ),
+                          );
+                        } else {
+                          // 如果没有找到目标节点或目标节点没有建设成本，则不显示建设资源
+                          return const SizedBox.shrink();
+                        }
+                      }
+                    ),
                 ],
               ),
             ),
@@ -125,8 +160,63 @@ class NodeWidget extends ConsumerWidget {
                     ? (totalInv / node.maxCapacity).clamp(0.0, 1.0) 
                     : 0.0;
               }
+              
+              // 若为控制类型的卡片且有目标节点，进度条显示目标节点的存储量
+              else if (node.category == ProcessCategory.control && node.logicTargetNodeId != null) {
+                // 查找目标节点（使用双向前缀匹配，兼容短ID和完整ID）
+                final targetNode = ref.read(canvasProvider).nodes.firstWhere(
+                  (n) => n.id.startsWith(node.logicTargetNodeId!) || node.logicTargetNodeId!.startsWith(n.id), 
+                  orElse: () => node,
+                );
+                
+                // 如果目标节点存在，则显示目标节点的存储量
+                if (targetNode != node) {
+                  double totalInv = 0.0;
+                  targetNode.inputInventory.values.forEach((v) => totalInv += v);
+                  targetNode.outputInventory.values.forEach((v) => totalInv += v);
+                  
+                  // 防止 maxCapacity 为 0 的除法异常
+                  displayProgress = targetNode.maxCapacity > 0 
+                      ? (totalInv / targetNode.maxCapacity).clamp(0.0, 1.0) 
+                      : 0.0;
+                }
+              }
+              
+              // 若为蓝图类型的卡片，进度条显示建设资源积累进度（使用节点自身的建设配方）
+              else if (!node.isBuilt) {
+                // 计算建设资源的满足程度
+                if (node.constructionCost.isNotEmpty) {
+                  double totalRequired = 0.0;
+                  double totalAvailable = 0.0;
+                  
+                  for (final entry in node.constructionCost.entries) {
+                    final resourceName = entry.key;
+                    final requiredAmount = entry.value;
+                    totalRequired += requiredAmount;
+                    
+                    // 在输入库存中查找对应资源
+                    double availableAmount = 0.0;
+                    for (final inputPort in node.inputs) {
+                      if (inputPort.itemName == resourceName) {
+                        availableAmount = node.inputInventory[inputPort.id] ?? 0.0;
+                        break;
+                      }
+                    }
+                    
+                    // 累加可用资源，但不超过所需量（避免进度超过100%）
+                    totalAvailable += availableAmount.clamp(0.0, requiredAmount);
+                  }
+                  
+                  displayProgress = totalRequired > 0 
+                      ? (totalAvailable / totalRequired).clamp(0.0, 1.0) 
+                      : 0.0;
+                } else {
+                  // 如果没有建设成本，进度为0
+                  displayProgress = 0.0;
+                }
+              }
 
-              if (node.status != NodeStatus.idle) {
+              if (node.status != NodeStatus.idle || !node.isBuilt) {
                 return Container(
                   height: 4,
                   decoration: BoxDecoration(
@@ -137,9 +227,11 @@ class NodeWidget extends ConsumerWidget {
                   child: FractionallySizedBox(
                     widthFactor: displayProgress, // 替换这里原有的 node.progress
                     child: Container(
-                      color: node.category == ProcessCategory.storing 
-                          ? Colors.blueAccent // 仓储卡片使用专用的水位颜色，其余沿用 status
-                          : node.status.color,
+                      color: !node.isBuilt 
+                          ? Colors.blueAccent // 蓝图为建设进度，使用蓝色
+                          : (node.category == ProcessCategory.storing 
+                              ? Colors.blueAccent // 仓储卡片使用专用的水位颜色
+                              : node.status.color),
                     ),
                   ),
                 );
@@ -241,6 +333,7 @@ class NodeWidget extends ConsumerWidget {
     if (result == 'edit' && context.mounted) {
       _showEditDialog(context, ref);
     } else if (result == 'delete') {
+      // 使用完整ID删除节点
       ref.read(canvasProvider.notifier).removeNode(node.id);
     }
   }
@@ -330,6 +423,42 @@ class NodeWidget extends ConsumerWidget {
           ),
         );
       },
+    );
+  }
+
+  // [更新] 构建信号端口
+  Widget _buildSignalPort(BuildContext context, WidgetRef ref, SignalPort port, bool isInput) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!isInput) Text(port.value.toStringAsFixed(1), style: const TextStyle(fontSize: 8, color: Colors.amber)),
+          const SizedBox(width: 4),
+          Draggable<String>(
+            data: "SIG:${node.id}:${port.id}", // 增加 SIG 前缀区分
+            feedback: Container(width: 12, height: 12, color: Colors.amber),
+            child: DragTarget<String>(
+              onAccept: (data) {
+                if (data.startsWith("SIG:")) {
+                  ref.read(canvasProvider.notifier).finalizeSignalConnection(node.id, port.id);
+                }
+              },
+              builder: (context, candidate, _) => Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(
+                  color: port.type == SignalType.digital ? Colors.amber : Colors.purple,
+                  borderRadius: BorderRadius.circular(2), // 方形端口
+                  border: Border.all(color: Colors.black, width: 1),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          if (isInput) Text(port.name, style: const TextStyle(fontSize: 9, color: Colors.amber)),
+        ],
+      ),
     );
   }
 
