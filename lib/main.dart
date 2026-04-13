@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // 添加剪贴板服务
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart'; // 顶部导入依赖
+import 'package:collection/collection.dart'; // 用于 firstWhereOrNull
 import 'models.dart';
 import 'providers.dart';
 import 'node_widget.dart'; // 见后文
+import 'api_server.dart'; // [新增] 导入接口服务模块
 
 void main() {
   runApp(const ProviderScope(child: IndustrialSimulatorApp()));
@@ -39,6 +42,9 @@ class CanvasScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // [Init] 注册并监听本地 API 服务网关，使其伴随主 UI 进程启动并常驻
+    ref.watch(apiServerProvider);
+    
     final canvasState = ref.watch(canvasProvider);
 
     return Scaffold(
@@ -122,6 +128,24 @@ class CanvasScreen extends ConsumerWidget {
               }
             },
           ),
+          IconButton(
+            icon: const Icon(Icons.paste),
+            tooltip: '从剪贴板导入',
+            onPressed: () async {
+              try {
+                String clipboardData = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
+                if (clipboardData.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('剪贴板为空')));
+                  return;
+                }
+                
+                await ref.read(canvasProvider.notifier).importFromJsonString(clipboardData);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('从剪贴板导入成功')));
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('从剪贴板导入失败: $e')));
+              }
+            },
+          ),
         ],
       ),
       body: Container(
@@ -161,6 +185,8 @@ class CanvasScreen extends ConsumerWidget {
                     activeSourceNodeId: canvasState.activeDragSourceNodeId,
                     activeDragSourcePortId: canvasState.activeDragSourcePortId,
                     activeDragCurrentPosition: canvasState.activeDragCurrentPosition,
+                    activeDragType: canvasState.activeDragType,
+                    isConnectionValid: canvasState.isConnectionValid,
                   ),
                 ),
                 // 2. 绘制各个节点卡片
@@ -297,6 +323,8 @@ class _ConnectionPainter extends CustomPainter {
   final String? activeSourceNodeId;
   final String? activeDragSourcePortId;
   final Offset? activeDragCurrentPosition;
+  final DragType activeDragType; // [新增] 拖拽类型标识
+  final bool isConnectionValid; // [新增] 连接是否有效
 
   _ConnectionPainter({
     required this.nodes,
@@ -304,6 +332,8 @@ class _ConnectionPainter extends CustomPainter {
     this.activeSourceNodeId,
     this.activeDragSourcePortId,
     this.activeDragCurrentPosition,
+    this.activeDragType = DragType.none, // [新增] 拖拽类型标识
+    this.isConnectionValid = false, // [新增] 连接是否有效
   });
 
   // [Feature] 根据物料名称生成确定性且视觉舒适的颜色
@@ -318,11 +348,10 @@ class _ConnectionPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final activePaint = Paint()
-      ..color = Colors.blueAccent
-      ..strokeWidth = 3.0
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
+    // 物料线画笔
+    final materialPaint = Paint()..strokeWidth = 3.0..style = PaintingStyle.stroke;
+    // 信号线画笔 (更细、霓虹色表示数据流)
+    final signalPaint = Paint()..color = Colors.cyanAccent..strokeWidth = 1.5..style = PaintingStyle.stroke..strokeCap = StrokeCap.square;
 
     Offset getPortGlobalOffset(String nodeId, bool isOutput, int portIndex) {
       final node = nodes.firstWhere((n) => n.id == nodeId);
@@ -345,29 +374,47 @@ class _ConnectionPainter extends CustomPainter {
       final start = getPortGlobalOffset(sNode.id, true, sIndex);
       final end = getPortGlobalOffset(tNode.id, false, tIndex);
       
-      // [Fix] 获取当前输出端口的物料名称，并为其分配专门的颜色画笔
-      final itemName = sNode.outputs[sIndex].itemName;
-      final paint = Paint()
-        ..color = _getColorFromItemName(itemName)
-        ..strokeWidth = 3.0
-        ..style = PaintingStyle.stroke;
-
+      // 根据连接类型设置画笔
+      Paint paint = conn.type == ConnectionType.signal 
+          ? signalPaint 
+          : (Paint()..color = _getColorFromItemName(sNode.outputs[sIndex].itemName)..strokeWidth = 3.0..style = PaintingStyle.stroke);
+      
       _drawBezierCurve(canvas, start, end, paint);
     }
 
-    // 绘制正在拖拽的活动连接
-    if (activeSourceNodeId != null && activeDragCurrentPosition != null) {
-      final sNode = nodes.firstWhere((n) => n.id == activeSourceNodeId);
-      int sIndex = sNode.outputs.indexWhere((p) => p.id == activeDragSourcePortId); 
-      final start = getPortGlobalOffset(sNode.id, true, sIndex != -1 ? sIndex : 0);
-      
-      // 拖拽时可根据源物料动态染色
-      if (sIndex != -1) {
-         activePaint.color = _getColorFromItemName(sNode.outputs[sIndex].itemName);
-      }
-      
-      _drawBezierCurve(canvas, start, activeDragCurrentPosition!, activePaint);
+// 绘制正在拖拽的活动连接
+// [Fix] 移除 isConnectionValid 门控：只要有活动源且鼠标位置有记录即绘制
+// endConnectionDrag 会清空 activeDragCurrentPosition，确保释放后不残留
+if (activeSourceNodeId != null && activeDragCurrentPosition != null) {
+  final sNodeList = nodes.where((n) => n.id == activeSourceNodeId);
+  if (sNodeList.isNotEmpty) {
+    final sNode = sNodeList.first;
+    
+    // 优先在物料输出端口中查找，再查找信号输出端口
+    int sIndex = sNode.outputs.indexWhere((p) => p.id == activeDragSourcePortId);
+    Offset start;
+    if (sIndex >= 0) {
+      start = getPortGlobalOffset(sNode.id, true, sIndex);
+    } else {
+      // 信号输出端口：垂直偏移基准为物料端口区上方
+      int sigIndex = sNode.signalOutputs.indexWhere((p) => p.id == activeDragSourcePortId);
+      start = Offset(
+        sNode.position.dx + 250,
+        sNode.position.dy + 60 + ((sigIndex >= 0 ? sigIndex : 0) * 28),
+      );
     }
+    
+    final bool isSignalDrag = (activeDragType == DragType.signalDigital ||
+        activeDragType == DragType.signalAnalog ||
+        activeDragType == DragType.signal);
+    
+    Paint activePaint = isSignalDrag
+        ? (Paint()..color = Colors.cyanAccent..strokeWidth = 2.0..style = PaintingStyle.stroke)
+        : (Paint()..color = Colors.blueAccent..strokeWidth = 3.0..style = PaintingStyle.stroke);
+    
+    _drawBezierCurve(canvas, start, activeDragCurrentPosition!, activePaint);
+  }
+}
   }
 
   void _drawBezierCurve(Canvas canvas, Offset start, Offset end, Paint paint) {

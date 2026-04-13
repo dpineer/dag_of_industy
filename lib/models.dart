@@ -3,40 +3,101 @@ import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
 
-// [新增] 信号类型：区分数字与模拟
+// [Architecture] 引入连线与拖拽类型枚举，彻底隔离物料流与数据流
+enum ConnectionType { material, signal }
+
+// [Feature] 严格区分类别的信号类型
 enum SignalType { digital, analog }
 
-// [新增] 逻辑算子：实现图灵完备的基础
-enum LogicOperator {
-  identity,    // 透传
-  and, or, not, xor, 
-  greater, less, equal,
-  adder,       // 加法器
-  latch,       // 锁存器 (Memory)
-  buffer,      // 缓冲/延时
-  schmidtTrigger // 阈值触发器
+// [Feature] 拖拽类型细分，用于在底层阻断非法连线
+enum DragType { none, material, signalDigital, signalAnalog, signal }
+
+// [Feature] 输入参数行为 (决定信号如何控制当前卡片)
+enum SignalInputBehavior {
+  none('无控制 (仅参与逻辑运算)'),
+  toggleRun('启停控制 (Digital: 1=运行, 0=停止)'),
+  triggerStack('触发扩容 (Digital: 上升沿)'),
+  triggerDismantle('触发拆除 (Digital: 上升沿)'),
+  setCapacityLimit('动态限产 (Analog: 设定最大库存)');
+
+  final String label;
+  const SignalInputBehavior(this.label);
 }
 
-// [新增] 信号端口模型
+// [Feature] 输出参数行为 (决定卡片物理状态如何映射为信号)
+enum SignalOutputBehavior {
+  none('无映射 (仅输出逻辑运算结果)'),
+  isRunning('运行状态 (Digital: 1=运, 0=停)'),
+  isStarved('缺料警告 (Digital: 1=缺, 0=正常)'),
+  isBlocked('堵塞警告 (Digital: 1=堵, 0=正常)'),
+  inventoryRatio('总体库存水位 (Analog: 0.0~1.0)'),
+  currentThroughput('当前吞吐压力 (Analog: 实际速率)');
+
+  final String label;
+  const SignalOutputBehavior(this.label);
+}
+
+// [Feature] 图灵完备逻辑算子集合 (ALU 操作)
+enum LogicOperator {
+  identity('透传 (Identity)'),
+  and('逻辑与 (AND)'),
+  or('逻辑或 (OR)'),
+  not('逻辑非 (NOT)'),
+  xor('异或 (XOR)'),
+  greater('大于 (A > B)'),
+  equal('等于 (A == B)'),
+  adder('加法器 (A + B)'),
+  latch('锁存器 (SR Latch, A=Set, B=Reset)');
+
+  final String displayName;
+  const LogicOperator(this.displayName);
+}
+
+// [Architecture] 信号端口实体
 class SignalPort {
   final String id;
   final String name;
   final SignalType type;
-  double value; // 当前实时信号值
+  
+  // 行为绑定分离：输入端口只看 inBehavior，输出端口只看 outBehavior
+  final SignalInputBehavior inBehavior;
+  final SignalOutputBehavior outBehavior;
+  double value; 
 
-  SignalPort({
-    required this.id,
-    required this.name,
-    this.type = SignalType.digital,
-    this.value = 0.0,
-  });
+   SignalPort({
+     String? id,
+     String? name,
+     required this.type,
+     this.inBehavior = SignalInputBehavior.none,
+     this.outBehavior = SignalOutputBehavior.none,
+     this.value = 0.0,
+   }) : name = name ?? (type == SignalType.digital ? 'Digital Signal' : 'Analog Signal'),
+        id = id ?? _uuid.v4();
 
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'type': type.name, 'value': value};
+  SignalPort copyWith({
+    String? name, SignalType? type, 
+    SignalInputBehavior? inBehavior, SignalOutputBehavior? outBehavior, double? value
+  }) {
+    return SignalPort(
+      id: id,
+      name: name ?? this.name,
+      type: type ?? this.type,
+      inBehavior: inBehavior ?? this.inBehavior,
+      outBehavior: outBehavior ?? this.outBehavior,
+      value: value ?? this.value,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id, 'name': name, 'type': type.name, 
+    'inBehavior': inBehavior.name, 'outBehavior': outBehavior.name, 'value': value
+  };
   
   factory SignalPort.fromJson(Map<String, dynamic> json) => SignalPort(
-    id: json['id'],
-    name: json['name'],
-    type: SignalType.values.firstWhere((e) => e.name == json['type']),
+    id: json['id'], name: json['name'],
+    type: SignalType.values.firstWhere((e) => e.name == json['type'], orElse: () => SignalType.digital),
+    inBehavior: SignalInputBehavior.values.firstWhere((e) => e.name == json['inBehavior'], orElse: () => SignalInputBehavior.none),
+    outBehavior: SignalOutputBehavior.values.firstWhere((e) => e.name == json['outBehavior'], orElse: () => SignalOutputBehavior.none),
     value: (json['value'] ?? 0.0).toDouble(),
   );
 }
@@ -321,6 +382,11 @@ class ProductionNode {
     'conditionValue': conditionValue, // [新增]
     'conditionPortId': conditionPortId, // [新增]
     'conditionTargetNodeId': conditionTargetNodeId, // [新增]
+    // [新增] 信号层序列化
+    'signalInputs': signalInputs.map((e) => e.toJson()).toList(),
+    'signalOutputs': signalOutputs.map((e) => e.toJson()).toList(),
+    'logicOp': logicOp.name,
+    'registers': registers,
   };
 
   factory ProductionNode.fromJson(Map<String, dynamic> json) {
@@ -341,13 +407,15 @@ class ProductionNode {
       logicCondition: json['logicCondition'], // [新增]
       conditionValue: json['conditionValue'] != null ? double.tryParse(json['conditionValue'].toString()) : null, // [新增]
       conditionPortId: json['conditionPortId'], // [新增]
-      conditionTargetNodeId: json['conditionTargetNodeId'], // [新增]
+      conditionTargetNodeId: json['conditionTargetNodeId'], // [新增],
+      // [新增] 信号层反序列化
+      signalInputs: (json['signalInputs'] as List?)?.map((e) => SignalPort.fromJson(e)).toList() ?? [],
+      signalOutputs: (json['signalOutputs'] as List?)?.map((e) => SignalPort.fromJson(e)).toList() ?? [],
+      logicOp: LogicOperator.values.firstWhere((e) => e.name == json['logicOp'], orElse: () => LogicOperator.identity),
+      registers: (json['registers'] as Map<String, dynamic>?)?.map((key, value) => MapEntry(key, (value as num).toDouble())) ?? const {},
     );
   }
 }
-
-// [更新] Connection 增加类型区分
-enum ConnectionType { material, signal }
 
 class Connection {
   final String id;

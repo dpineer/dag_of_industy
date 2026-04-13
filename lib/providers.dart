@@ -25,6 +25,8 @@ class CanvasState {
   final String? activeDragSourcePortId; // [新增] 拖拽源端口ID
   final Offset? activeDragCurrentPosition; // [新增] 拖拽当前位置
   final bool isSimulating; // [新增] 模拟状态
+  final DragType activeDragType; // [Fix] 新增拖拽类型标识
+  final bool isConnectionValid; // [新增] 连接是否有效（是否连接到目标节点）
 
   CanvasState({
     this.nodes = const [],
@@ -41,6 +43,8 @@ class CanvasState {
     this.activeDragSourcePortId, // [新增]
     this.activeDragCurrentPosition, // [新增]
     this.isSimulating = true, // [新增]
+    this.activeDragType = DragType.none, // [Fix] 新增拖拽类型标识
+    this.isConnectionValid = false, // [新增] 连接是否有效（是否连接到目标节点）
   });
 
   CanvasState copyWith({
@@ -51,14 +55,16 @@ class CanvasState {
     String? sourcePortId,
     Offset? connectionStartPos,
     Offset? connectionCurrentPos,
-    bool? isSignalConnecting, // [新增]
-    String? signalSourceNodeId, // [新增]
-    String? signalSourcePortId, // [新增]
-    String? activeDragSourceNodeId, // [新增]
-    String? activeDragSourcePortId, // [新增]
-    Offset? activeDragCurrentPosition, // [新增]
-    bool? isSimulating, // [新增]
-    bool clearDrag = false, // [新增] 清除拖拽状态
+    bool? isSignalConnecting,
+    String? signalSourceNodeId,
+    String? signalSourcePortId,
+    String? activeDragSourceNodeId,
+    String? activeDragSourcePortId,
+    Offset? activeDragCurrentPosition,
+    bool? isSimulating,
+    bool clearDrag = false, 
+    DragType? activeDragType, 
+    bool? isConnectionValid, 
   }) {
     return CanvasState(
       nodes: nodes ?? this.nodes,
@@ -68,27 +74,166 @@ class CanvasState {
       sourcePortId: sourcePortId ?? this.sourcePortId,
       connectionStartPos: connectionStartPos ?? this.connectionStartPos,
       connectionCurrentPos: connectionCurrentPos ?? this.connectionCurrentPos,
-      isSignalConnecting: isSignalConnecting ?? this.isSignalConnecting, // [新增]
-      signalSourceNodeId: signalSourceNodeId ?? this.signalSourceNodeId, // [新增]
-      signalSourcePortId: signalSourcePortId ?? this.signalSourcePortId, // [新增]
-      activeDragSourceNodeId: activeDragSourceNodeId ?? this.activeDragSourceNodeId, // [新增]
-      activeDragSourcePortId: activeDragSourcePortId ?? this.activeDragSourcePortId, // [新增]
-      activeDragCurrentPosition: activeDragCurrentPosition ?? this.activeDragCurrentPosition, // [新增]
-      isSimulating: isSimulating ?? this.isSimulating, // [新增]
+      isSignalConnecting: isSignalConnecting ?? this.isSignalConnecting,
+      signalSourceNodeId: signalSourceNodeId ?? this.signalSourceNodeId,
+      signalSourcePortId: signalSourcePortId ?? this.signalSourcePortId,
+      // [核心修复] 必须显式处理 clearDrag 时的 null 覆盖，防止 ?? 操作符保留脏数据
+      activeDragSourceNodeId: clearDrag ? null : (activeDragSourceNodeId ?? this.activeDragSourceNodeId),
+      activeDragSourcePortId: clearDrag ? null : (activeDragSourcePortId ?? this.activeDragSourcePortId),
+      activeDragCurrentPosition: clearDrag ? null : (activeDragCurrentPosition ?? this.activeDragCurrentPosition),
+      isSimulating: isSimulating ?? this.isSimulating,
+      activeDragType: clearDrag ? DragType.none : (activeDragType ?? this.activeDragType),
+      isConnectionValid: isConnectionValid ?? this.isConnectionValid,
     );
   }
 }
 
 class CanvasNotifier extends Notifier<CanvasState> {
-  Timer? _timer;
+  Timer? _simTimer;
+  Timer? _logicTimer;
 
   @override
-  CanvasState build() {
-    _timer = Timer.periodic(const Duration(milliseconds: 100), _tick);
-    return CanvasState();
+  CanvasState build() => CanvasState();
+
+  void toggleSimulation() {
+    if (state.isSimulating) {
+      _simTimer?.cancel();
+      _logicTimer?.cancel();
+      state = state.copyWith(isSimulating: false);
+    } else {
+      state = state.copyWith(isSimulating: true);
+      // [Architecture] 双轨时钟：物理引擎100ms，逻辑引擎50ms(双倍采样率防止信号丢失)
+      _simTimer = Timer.periodic(const Duration(milliseconds: 100), _simTick);
+      _logicTimer = Timer.periodic(const Duration(milliseconds: 50), _logicTick);
+    }
   }
 
-  void _tick(Timer timer) {
+  // ==========================================
+  // [独立计算引擎] 分离的 I/O 行为映射
+  // ==========================================
+  void _logicTick(Timer timer) {
+    List<ProductionNode> nextNodes = List.from(state.nodes);
+
+    // 1. 物理状态 -> 输出行为映射 (Output Behavior Mapping)
+    for (int i = 0; i < nextNodes.length; i++) {
+      var node = nextNodes[i];
+      var outputs = List<SignalPort>.from(node.signalOutputs);
+
+      for (int j = 0; j < outputs.length; j++) {
+        var port = outputs[j];
+        double newValue;
+        switch (port.outBehavior) {
+          case SignalOutputBehavior.isRunning:
+            newValue = node.isRunning ? 1.0 : 0.0;
+            break;
+          case SignalOutputBehavior.isStarved:
+            newValue = node.status == NodeStatus.starved ? 1.0 : 0.0;
+            break;
+          case SignalOutputBehavior.isBlocked:
+            newValue = node.status == NodeStatus.blocked ? 1.0 : 0.0;
+            break;
+          case SignalOutputBehavior.inventoryRatio:
+            double total = node.inputInventory.values.fold(0.0, (a, b) => a + b);
+            newValue = node.maxCapacity > 0 ? (total / node.maxCapacity) : 0.0;
+            break;
+          case SignalOutputBehavior.currentThroughput:
+            newValue = 0.0;
+            break;
+          default:
+            // outBehavior == none，不修改值
+            newValue = port.value;
+        }
+        // [Fix] 通过 copyWith 生成新对象，确保 Riverpod 感知值变化并触发 UI 重建
+        outputs[j] = port.copyWith(value: newValue);
+      }
+      nextNodes[i] = node.copyWith(signalOutputs: outputs);
+    }
+
+    // 2. 信号传播：构建线缆值映射表
+    Map<String, double> wireValues = {};
+    for (var conn in state.connections.where((c) => c.type == ConnectionType.signal)) {
+      // 从 nextNodes 中读取（已含本轮输出行为映射的最新值）
+      final sNodeIdx = nextNodes.indexWhere((n) => n.id == conn.sourceNodeId);
+      if (sNodeIdx < 0) continue;
+      final sNode = nextNodes[sNodeIdx];
+      final sPortIdx = sNode.signalOutputs.indexWhere((p) => p.id == conn.sourcePortId);
+      if (sPortIdx < 0) continue;
+      wireValues["${conn.targetNodeId}:${conn.targetPortId}"] =
+          sNode.signalOutputs[sPortIdx].value;
+    }
+
+    // 3. 接收端处理：输入行为映射 & ALU 逻辑运算
+    for (int i = 0; i < nextNodes.length; i++) {
+      var node = nextNodes[i];
+
+      // [Fix] 通过 copyWith 生成新对象更新信号输入端口值，触发 Riverpod 状态变更
+      var inputs = node.signalInputs.map((p) {
+        final incoming = wireValues["${node.id}:${p.id}"];
+        if (incoming != null) {
+          return p.copyWith(value: incoming);
+        }
+        return p;
+      }).toList();
+      node = node.copyWith(signalInputs: inputs);
+
+      // ALU 逻辑运算（仅对 control 类卡片生效）
+      if (node.category == ProcessCategory.control) {
+        double inA = inputs.isNotEmpty ? inputs[0].value : 0.0;
+        double inB = inputs.length > 1 ? inputs[1].value : 0.0;
+        double outVal = 0.0;
+        Map<String, double> nextRegs = Map.from(node.registers);
+
+        switch (node.logicOp) {
+          case LogicOperator.and:   outVal = (inA > 0.5 && inB > 0.5) ? 1.0 : 0.0; break;
+          case LogicOperator.or:    outVal = (inA > 0.5 || inB > 0.5) ? 1.0 : 0.0; break;
+          case LogicOperator.not:   outVal = inA > 0.5 ? 0.0 : 1.0; break;
+          case LogicOperator.xor:   outVal = (inA > 0.5) ^ (inB > 0.5) ? 1.0 : 0.0; break;
+          case LogicOperator.adder: outVal = inA + inB; break;
+          case LogicOperator.greater: outVal = inA > inB ? 1.0 : 0.0; break;
+          case LogicOperator.equal: outVal = (inA - inB).abs() < 0.001 ? 1.0 : 0.0; break;
+          case LogicOperator.latch:
+            double current = nextRegs['q'] ?? 0.0;
+            if (inA > 0.5) current = 1.0; // Set
+            if (inB > 0.5) current = 0.0; // Reset
+            nextRegs['q'] = current;
+            outVal = current;
+            break;
+          default: outVal = inA;
+        }
+
+        // [Fix] 同样通过 copyWith 更新输出端口值
+        var outputs = node.signalOutputs.toList();
+        if (outputs.isNotEmpty) {
+          outputs[0] = outputs[0].copyWith(value: outVal);
+        }
+        node = node.copyWith(signalOutputs: outputs, registers: nextRegs);
+      }
+
+      // 控制行为执行（Input Behavior Application）
+      bool nextRunState = node.isRunning;
+      double nextCapacity = node.maxCapacity;
+
+      for (var p in node.signalInputs) {
+        if (p.inBehavior == SignalInputBehavior.toggleRun && p.type == SignalType.digital) {
+          nextRunState = p.value > 0.5;
+        } else if (p.inBehavior == SignalInputBehavior.setCapacityLimit && p.type == SignalType.analog) {
+          nextCapacity = p.value > 0 ? p.value : 0.0;
+        }
+      }
+
+      if (node.isRunning != nextRunState || node.maxCapacity != nextCapacity) {
+        node = node.copyWith(isRunning: nextRunState, maxCapacity: nextCapacity);
+      }
+      nextNodes[i] = node;
+    }
+
+    state = state.copyWith(nodes: nextNodes);
+  }
+
+  // ==========================================
+  // 物理模拟引擎 (物料流计算)
+  // ==========================================
+  void _simTick(Timer timer) {
     if (!state.isSimulating) return; // [新增] 检查模拟状态
 
     List<ProductionNode> nextNodes = List.from(state.nodes);
@@ -196,126 +341,7 @@ class CanvasNotifier extends Notifier<CanvasState> {
       }
     }
 
-    // [核心] 独立于物料流的逻辑信号 Tick
-    _logicTick(timer);
-
     state = state.copyWith(nodes: nextNodes);
-  }
-
-  // [核心] 独立于物料流的逻辑信号 Tick
-  void _logicTick(Timer timer) {
-    List<ProductionNode> nextNodes = List.from(state.nodes);
-    
-    // 第一步：状态到信号的提取 (State -> Signal Output)
-    for (int i = 0; i < nextNodes.length; i++) {
-      nextNodes[i] = _extractStatusToSignals(nextNodes[i]);
-    }
-
-    // 第二步：信号传播 (Signal Propagation)
-    // 建立一个信号池，暂存本轮 Tick 的信号值
-    Map<String, double> signalPool = {}; 
-    for (var conn in state.connections) {
-      if (conn.type == ConnectionType.signal) {
-        final sNode = nextNodes.firstWhere((n) => n.id == conn.sourceNodeId);
-        final sPort = sNode.signalOutputs.firstWhere((p) => p.id == conn.sourcePortId);
-        signalPool["${conn.targetNodeId}:${conn.targetPortId}"] = sPort.value;
-      }
-    }
-
-    // 第三步：逻辑运算处理 (Logic Computation)
-    for (int i = 0; i < nextNodes.length; i++) {
-      var node = nextNodes[i];
-      
-      // 更新输入信号端口值
-      var updatedInputs = node.signalInputs.map((p) {
-        return SignalPort(
-          id: p.id,
-          name: p.name,
-          type: p.type,
-          value: signalPool["${node.id}:${p.id}"] ?? 0.0,
-        );
-      }).toList();
-
-      node = node.copyWith(signalInputs: updatedInputs);
-
-      // 如果是逻辑节点，执行运算
-      if (node.category == ProcessCategory.control) {
-        node = _executeLogicOperations(node);
-      }
-
-      // 第四步：信号到控制的映射 (Signal Input -> Control)
-      node = _applySignalsToControl(node);
-      nextNodes[i] = node;
-    }
-
-    state = state.copyWith(nodes: nextNodes);
-  }
-
-  // [功能] 节点物理状态转换为信号输出
-  ProductionNode _extractStatusToSignals(ProductionNode node) {
-    var outputs = List<SignalPort>.from(node.signalOutputs);
-    for (int i = 0; i < outputs.length; i++) {
-      var port = outputs[i];
-      // 约定名称：status_code (0:idle, 1:running, 2:starved, 3:blocked)
-      if (port.name == 'status_code') {
-        port.value = node.status.index.toDouble();
-      }
-      // 约定名称：inv_ratio (0.0 - 1.0)
-      if (port.name == 'inv_ratio') {
-        double total = node.inputInventory.values.fold(0, (a, b) => a + b);
-        port.value = node.maxCapacity > 0 ? (total / node.maxCapacity) : 0;
-      }
-    }
-    return node.copyWith(signalOutputs: outputs);
-  }
-
-  // [功能] 逻辑算子执行引擎 (图灵完备核心)
-  ProductionNode _executeLogicOperations(ProductionNode node) {
-    double inA = node.signalInputs.isNotEmpty ? node.signalInputs[0].value : 0.0;
-    double inB = node.signalInputs.length > 1 ? node.signalInputs[1].value : 0.0;
-    double outVal = 0.0;
-    Map<String, double> nextRegs = Map.from(node.registers);
-
-    switch (node.logicOp) {
-      case LogicOperator.and:
-        outVal = (inA > 0.5 && inB > 0.5) ? 1.0 : 0.0;
-        break;
-      case LogicOperator.not:
-        outVal = inA > 0.5 ? 0.0 : 1.0;
-        break;
-      case LogicOperator.adder:
-        outVal = inA + inB;
-        break;
-      case LogicOperator.latch:
-        // Set-Reset Latch: inA 为 Set, inB 为 Reset
-        double current = nextRegs['q'] ?? 0.0;
-        if (inA > 0.5) current = 1.0;
-        if (inB > 0.5) current = 0.0;
-        nextRegs['q'] = current;
-        outVal = current;
-        break;
-      case LogicOperator.greater:
-        outVal = inA > inB ? 1.0 : 0.0;
-        break;
-      default:
-        outVal = inA;
-    }
-
-    var outputs = List<SignalPort>.from(node.signalOutputs);
-    if (outputs.isNotEmpty) outputs[0].value = outVal;
-    
-    return node.copyWith(signalOutputs: outputs, registers: nextRegs);
-  }
-
-  // [功能] 信号控制节点行为
-  ProductionNode _applySignalsToControl(ProductionNode node) {
-    // 寻找约定名称为 'ctrl_run' 的输入信号
-    final runSig = node.signalInputs.where((p) => p.name == 'ctrl_run').firstOrNull;
-    if (runSig != null) {
-      // 只要 ctrl_run 信号 > 0.5，则强制启动，否则关闭
-      return node.copyWith(isRunning: runSig.value > 0.5);
-    }
-    return node;
   }
 
   // [新增] 信号连接处理方法
@@ -338,11 +364,6 @@ class CanvasNotifier extends Notifier<CanvasState> {
       final newConnections = List<Connection>.from(state.connections)..add(newConnection);
       state = state.copyWith(connections: newConnections);
     }
-  }
-
-  // [新增] 切换模拟状态
-  void toggleSimulation() {
-    state = state.copyWith(isSimulating: !state.isSimulating);
   }
 
   /// 执行一回合的逻辑自动化控制指令
@@ -390,7 +411,7 @@ class CanvasNotifier extends Notifier<CanvasState> {
               nextNodes[targetIndex] = updatedTargetNode.copyWith(
                 isBuilt: true, 
                 isRunning: false,
-                stackCount: 1 
+                stackCount: originalStackCount // 保持原始堆叠数量
               );
             }
             break;
@@ -436,7 +457,7 @@ class CanvasNotifier extends Notifier<CanvasState> {
               nextNodes[targetIndex] = targetNode.copyWith(
                 isBuilt: false,
                 isRunning: false,
-                stackCount: 1, 
+                stackCount: originalStackCount > 1 ? originalStackCount - 1 : 1, // 保持原始堆叠数量的逻辑
               );
             }
             break;
@@ -719,63 +740,87 @@ class CanvasNotifier extends Notifier<CanvasState> {
     state = state.copyWith(nodes: updatedNodes, connections: updatedConnections);
   }
 
-  // --- 连线拖拽生命周期 (改进适配 Draggable) ---
-  void startConnectionDrag(String nodeId, String portId) {
+  // ==========================================
+  // [连线合法性校验] 严格同态连接 (Digital->Digital, Analog->Analog)
+  // ==========================================
+  void startConnectionDrag(String nodeId, String portId, [DragType? type]) {
     state = state.copyWith(
       activeDragSourceNodeId: nodeId,
       activeDragSourcePortId: portId,
-      // 初始拖拽不记录鼠标位置，由绘制层依据源端口全局位置推算起点
-      activeDragCurrentPosition: null, 
-    );
-  }
-
-  void updateConnectionDrag(Offset globalPosition) {
-    state = state.copyWith(activeDragCurrentPosition: globalPosition);
-  }
-
-  void endConnectionDrag() {
-    // 清除拖拽状态，这将导致贝塞尔曲线不再绘制
-    state = state.copyWith(
-      activeDragSourceNodeId: null,
-      activeDragSourcePortId: null,
+      // [核心修复] 不要强制向下转型为宏观 DragType.signal，必须保留精准的 signalDigital 或 signalAnalog
+      activeDragType: type ?? DragType.material,
       activeDragCurrentPosition: null,
     );
   }
 
-  void finalizeConnection(String targetNodeId, String targetPortId) {
+  void updateConnectionDrag(Offset globalPosition) {
+    // [Fix] 拖拽过程中直接更新位置，不再操作 isConnectionValid
+    // isConnectionValid 仅由 DragTarget.onWillAccept 反馈写入
+    state = state.copyWith(activeDragCurrentPosition: globalPosition);
+  }
+
+  void endConnectionDrag() {
+    state = state.copyWith(
+      clearDrag: true,
+      isConnectionValid: false,
+      // copyWith 中 clearDrag=true 会清除 activeDragSourceNodeId/PortId/Type
+      // activeDragCurrentPosition 需要在 CanvasState.copyWith 中同步清除
+    );
+  }
+
+  void finalizeConnection(String targetNodeId, String targetPortId, DragType targetPortType) {
     if (state.activeDragSourceNodeId == null || state.activeDragSourcePortId == null) return;
-    
-    // 防止自环连接
+
+    final sourceType = state.activeDragType;
+
+    // [Fix] 统一信号兼容性判断：digital/analog/signal 三者之间可互连，
+    // material 仅与 material 互连，彻底修复因类型归并导致的连线失败问题。
+    final bool sourceIsSignal = sourceType == DragType.signal ||
+        sourceType == DragType.signalDigital || sourceType == DragType.signalAnalog;
+    final bool targetIsSignal = targetPortType == DragType.signal ||
+        targetPortType == DragType.signalDigital || targetPortType == DragType.signalAnalog;
+
+    final bool typesCompatible = (sourceIsSignal && targetIsSignal) ||
+        (sourceType == DragType.material && targetPortType == DragType.material);
+
+    if (!typesCompatible) {
+      endConnectionDrag();
+      return;
+    }
+
     if (state.activeDragSourceNodeId == targetNodeId) {
       endConnectionDrag();
       return;
     }
 
-    final sourceNode = state.nodes.firstWhere((n) => n.id == state.activeDragSourceNodeId!, orElse: () => state.nodes.first);
-    final targetNode = state.nodes.firstWhere((n) => n.id == targetNodeId, orElse: () => state.nodes.first);
-    
-    final sourcePort = sourceNode.outputs.firstWhere((p) => p.id == state.activeDragSourcePortId!, orElse: () => sourceNode.outputs.first);
-    final targetPort = targetNode.inputs.firstWhere((p) => p.id == targetPortId, orElse: () => targetNode.inputs.first);
-
-    // 【核心修复 3】: 严格校验物料名称是否一致
-    if (sourcePort.itemName != targetPort.itemName) {
-      // 此处可抛出警告或直接中断连线
-      endConnectionDrag();
-      return;
-    }
-
-    // 建立连接
     final newConn = Connection(
       sourceNodeId: state.activeDragSourceNodeId!,
       sourcePortId: state.activeDragSourcePortId!,
       targetNodeId: targetNodeId,
       targetPortId: targetPortId,
+      type: sourceIsSignal ? ConnectionType.signal : ConnectionType.material,
     );
-    
+
     state = state.copyWith(
-      connections:[...state.connections, newConn],
+      connections: [...state.connections, newConn],
       clearDrag: true,
     );
+  }
+
+  // 添加一个方法来处理拖拽取消
+  void cancelConnectionDrag() {
+    if (state.activeDragSourceNodeId != null) {
+      // 如果有活动的拖拽但没有连接到任何节点，则清除拖拽状态
+      state = state.copyWith(
+        isConnectionValid: false, // 连接无效
+        clearDrag: true
+      );
+    }
+  }
+
+  // [Fix] 仅用于 DragTarget 悬停时的视觉高亮反馈，不参与绘制逻辑门控
+  void setConnectionHoverValid(bool valid) {
+    state = state.copyWith(isConnectionValid: valid);
   }
 
   /// 获取图论分析器
@@ -804,6 +849,21 @@ class CanvasNotifier extends Notifier<CanvasState> {
     
     // 覆盖当前画布状态
     state = CanvasState(nodes: importedNodes, connections: importedConns);
+  }
+
+  /// 从 JSON 字符串导入
+  Future<void> importFromJsonString(String jsonString) async {
+    try {
+      final data = jsonDecode(jsonString);
+      
+      final importedNodes = (data['nodes'] as List).map((e) => ProductionNode.fromJson(e)).toList();
+      final importedConns = (data['connections'] as List).map((e) => Connection.fromJson(e)).toList();
+      
+      // 覆盖当前画布状态
+      state = CanvasState(nodes: importedNodes, connections: importedConns);
+    } catch (e) {
+      throw Exception("JSON格式错误: $e");
+    }
   }
 
   /// 更新节点位置
@@ -836,7 +896,9 @@ class CanvasNotifier extends Notifier<CanvasState> {
         // [Fix] 仅保留同类卡片的吸附合并逻辑，彻底删除了导致卡片乱飞、死锁失控的 physical push (排斥力) 算法。
         // 现在多张卡片允许安全地物理重叠，不再干涉拖拽手势。
         if (isSameKind && (rectActive.center - rectOther.center).distance < 50.0) {
-          activeNode = activeNode.copyWith(stackCount: activeNode.stackCount + otherNode.stackCount);
+          // [修复] 保留原始堆叠数量，而不是简单相加
+          int originalStackCount = activeNode.stackCount;
+          activeNode = activeNode.copyWith(stackCount: originalStackCount + otherNode.stackCount);
           newNodes[nodeIndex] = activeNode;
           
           String oldId = otherNode.id;
@@ -881,7 +943,8 @@ class CanvasNotifier extends Notifier<CanvasState> {
   }
 
   void dispose() {
-    _timer?.cancel();
+    _simTimer?.cancel();
+    _logicTimer?.cancel();
   }
 }
 

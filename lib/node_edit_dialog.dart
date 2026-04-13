@@ -221,12 +221,13 @@ class _NodeEditDialogState extends ConsumerState<NodeEditDialog> {
               // [新增] 逻辑运算器配置
               if (node.category == ProcessCategory.control) ...[
                 const Divider(),
-                const Text('运算器配置', style: TextStyle(fontWeight: FontWeight.bold)),
+                const Text('⚙️ 逻辑算子运算核心 (ALU)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.cyan)),
                 DropdownButtonFormField<LogicOperator>(
                   value: node.logicOp,
+                  decoration: const InputDecoration(labelText: '当前算子', isDense: true),
                   items: LogicOperator.values.map((op) => DropdownMenuItem(
                     value: op,
-                    child: Text(op.name.toUpperCase()),
+                    child: Text(op.displayName),
                   )).toList(),
                   onChanged: (val) {
                     if (val != null) {
@@ -234,22 +235,154 @@ class _NodeEditDialogState extends ConsumerState<NodeEditDialog> {
                     }
                   },
                 ),
-                // 信号端口管理...
-                TextButton(
-                  onPressed: () {
-                    final newIn = [...node.signalInputs, SignalPort(id: _uuid.v4(), name: 'sig_in')];
-                    _dispatchUpdate(node.copyWith(signalInputs: newIn));
-                  },
-                  child: const Text('添加信号输入端口'),
-                ),
-                TextButton(
-                  onPressed: () {
-                    final newOut = [...node.signalOutputs, SignalPort(id: _uuid.v4(), name: 'sig_out')];
-                    _dispatchUpdate(node.copyWith(signalOutputs: newOut));
-                  },
-                  child: const Text('添加信号输出端口'),
-                )
               ],
+              
+              // 信号端口配置区
+              const Divider(),
+              const Text('📶 信号输入 (接收数据 / 控制当前卡片)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.cyan)),
+              ...node.signalInputs.asMap().entries.map((entry) => Row(
+                children: [
+                  // [新增] 信号端口名称编辑输入框
+                  Expanded(flex: 1, child: TextFormField(
+                    initialValue: entry.value.name,
+                    decoration: const InputDecoration(labelText: '端口名', isDense: true),
+                    onChanged: (val) {
+                      var newList = List<SignalPort>.from(node.signalInputs);
+                      newList[entry.key] = entry.value.copyWith(name: val);
+                      _dispatchUpdate(node.copyWith(signalInputs: newList));
+                    },
+                  )),
+                  const SizedBox(width: 4),
+                  Expanded(flex: 1, child: DropdownButtonFormField<SignalType>(
+                    value: entry.value.type,
+                    decoration: const InputDecoration(labelText: '类型', isDense: true),
+                    items: const [
+                      DropdownMenuItem(value: SignalType.digital, child: Text('数字')),
+                      DropdownMenuItem(value: SignalType.analog, child: Text('模拟')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) {
+                        var newList = List<SignalPort>.from(node.signalInputs);
+                        newList[entry.key] = entry.value.copyWith(type: val);
+                        _dispatchUpdate(node.copyWith(signalInputs: newList));
+                      }
+                    },
+                  )),
+                  const SizedBox(width: 4),
+                  Expanded(flex: 3, child: Container(
+                    padding: EdgeInsets.zero,
+                    child: DropdownButtonFormField<SignalInputBehavior>(
+                      value: entry.value.inBehavior,
+                      decoration: const InputDecoration(
+                        labelText: '控制行为',
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      ),
+                      items: SignalInputBehavior.values.map((b) => DropdownMenuItem(
+                        value: b,
+                        child: SizedBox(
+                          width: 120, // 限制宽度以适应布局
+                          child: Text(
+                            b.label,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      )).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          var newList = List<SignalPort>.from(node.signalInputs);
+                          newList[entry.key] = entry.value.copyWith(inBehavior: val);
+                          _dispatchUpdate(node.copyWith(signalInputs: newList));
+                        }
+                      },
+                    ),
+                  )),
+                  IconButton(icon: const Icon(Icons.delete, size: 16), onPressed: () {
+                    var newList = List<SignalPort>.from(node.signalInputs)..removeAt(entry.key);
+                    _dispatchUpdate(node.copyWith(signalInputs: newList));
+                  }),
+                ],
+              )),
+              TextButton.icon(
+                icon: const Icon(Icons.add, size: 14), label: const Text('添加输入端口'),
+                onPressed: () {
+                  final newList = [...node.signalInputs, SignalPort(name: 'IN_${node.signalInputs.length}', type: SignalType.digital)];
+                  _dispatchUpdate(node.copyWith(signalInputs: newList));
+                },
+              ),
+
+              const Divider(),
+              const Text('📡 信号输出 (发送数据 / 广播卡片状态)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purple)),
+              ...node.signalOutputs.asMap().entries.map((entry) => Row(
+                children: [
+                  // [新增] 信号端口名称编辑输入框
+                  Expanded(flex: 1, child: TextFormField(
+                    initialValue: entry.value.name,
+                    decoration: const InputDecoration(labelText: '端口名', isDense: true),
+                    onChanged: (val) {
+                      var newList = List<SignalPort>.from(node.signalOutputs);
+                      newList[entry.key] = entry.value.copyWith(name: val);
+                      _dispatchUpdate(node.copyWith(signalOutputs: newList));
+                    },
+                  )),
+                  const SizedBox(width: 4),
+                  Expanded(flex: 1, child: DropdownButtonFormField<SignalType>(
+                    value: entry.value.type,
+                    decoration: const InputDecoration(labelText: '类型', isDense: true),
+                    items: const [
+                      DropdownMenuItem(value: SignalType.digital, child: Text('数字')),
+                      DropdownMenuItem(value: SignalType.analog, child: Text('模拟')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) {
+                        var newList = List<SignalPort>.from(node.signalOutputs);
+                        newList[entry.key] = entry.value.copyWith(type: val);
+                        _dispatchUpdate(node.copyWith(signalOutputs: newList));
+                      }
+                    },
+                  )),
+                  const SizedBox(width: 4),
+                  Expanded(flex: 3, child: Container(
+                    padding: EdgeInsets.zero,
+                    child: DropdownButtonFormField<SignalOutputBehavior>(
+                      value: entry.value.outBehavior,
+                      decoration: const InputDecoration(
+                        labelText: '映射源',
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      ),
+                      items: SignalOutputBehavior.values.map((b) => DropdownMenuItem(
+                        value: b,
+                        child: SizedBox(
+                          width: 120, // 限制宽度以适应布局
+                          child: Text(
+                            b.label,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      )).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          var newList = List<SignalPort>.from(node.signalOutputs);
+                          newList[entry.key] = entry.value.copyWith(outBehavior: val);
+                          _dispatchUpdate(node.copyWith(signalOutputs: newList));
+                        }
+                      },
+                    ),
+                  )),
+                  IconButton(icon: const Icon(Icons.delete, size: 16), onPressed: () {
+                    var newList = List<SignalPort>.from(node.signalOutputs)..removeAt(entry.key);
+                    _dispatchUpdate(node.copyWith(signalOutputs: newList));
+                  }),
+                ],
+              )),
+              TextButton.icon(
+                icon: const Icon(Icons.add, size: 14), label: const Text('添加输出端口'),
+                onPressed: () {
+                  final newList = [...node.signalOutputs, SignalPort(name: 'OUT_${node.signalOutputs.length}', type: SignalType.digital)];
+                  _dispatchUpdate(node.copyWith(signalOutputs: newList));
+                },
+              ),
               
               const Divider(),
               const Text('输入端口 (Inputs)', style: TextStyle(fontWeight: FontWeight.bold)),

@@ -1,16 +1,27 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // 添加剪贴板服务
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:math' show min; // 用于信号端口标签逻辑
 import 'models.dart';
 import 'providers.dart';
 import 'node_edit_dialog.dart';
 
-class NodeWidget extends ConsumerWidget {
+class NodeWidget extends ConsumerStatefulWidget {
   final ProductionNode node;
-
   const NodeWidget({super.key, required this.node});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<NodeWidget> createState() => _NodeWidgetState();
+}
+
+class _NodeWidgetState extends ConsumerState<NodeWidget> {
+  // 逻辑控制卡片的内联调试面板展开状态（默认展开）
+  bool _logicPanelExpanded = true;
+
+  ProductionNode get node => widget.node;
+
+  @override
+  Widget build(BuildContext context) {
     final bool isBlueprint = !node.isBuilt;
     
     // 封装单层卡片 UI 以便复用
@@ -67,60 +78,7 @@ class NodeWidget extends ConsumerWidget {
           ),
           
           // 【核心修复 2】: 逻辑卡片的专属控制面板
-          if (node.category == ProcessCategory.control)
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-              margin: const EdgeInsets.only(bottom: 4),
-              color: Colors.blueAccent.withOpacity(0.1),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children:[
-                      const Icon(Icons.hub, size: 16, color: Colors.blueAccent),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children:[
-                          Text("目标蓝图: ${node.logicTargetNodeId != null ? (node.logicTargetNodeId!.length > 6 ? node.logicTargetNodeId!.substring(0,6) : node.logicTargetNodeId!) : '未绑定'}", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-                          Text("控制指令: ${node.logicAction ?? '待配置'}", style: const TextStyle(fontSize: 10, color: Colors.orange)),
-                        ],
-                      ),
-                    ],
-                  ),
-                  // 显示目标节点的建设资源需求
-                  if (node.logicTargetNodeId != null)
-                    Builder(
-                      builder: (context) {
-                        // 查找目标节点（使用双向前缀匹配，兼容短ID和完整ID）
-                        final targetNode = ref.read(canvasProvider).nodes.firstWhere(
-                          (n) => n.id.startsWith(node.logicTargetNodeId!) || node.logicTargetNodeId!.startsWith(n.id), 
-                          orElse: () => node,
-                        );
-                        
-                        // 如果找到目标节点且其有建设成本，则显示目标节点的建设资源
-                        if (targetNode != node && targetNode.constructionCost.isNotEmpty) {
-                          return Container(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text("建设资源:", style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.blue)),
-                                ...targetNode.constructionCost.entries.map((entry) => 
-                                  Text("${entry.key}: ${entry.value}", style: TextStyle(fontSize: 9, color: Colors.blue.shade200))
-                                ),
-                              ],
-                            ),
-                          );
-                        } else {
-                          // 如果没有找到目标节点或目标节点没有建设成本，则不显示建设资源
-                          return const SizedBox.shrink();
-                        }
-                      }
-                    ),
-                ],
-              ),
-            ),
+          _buildLogicDebugPanel(context),
           
           // 【核心修复 2】: 解除对逻辑卡片的隔离，所有种类的卡片均需渲染输入输出端口
           // 使得控制卡片能够通过"输入端口"吸收外部建设所需资源，通过"输出端口"传递指令流或副产物
@@ -132,13 +90,25 @@ class NodeWidget extends ConsumerWidget {
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start, 
-                    children: node.inputs.map((i) => _buildInputPort(context, ref, i)).toList()
+                    children: [
+                      // 信号输入端口
+                      if (node.signalInputs.isNotEmpty) ...node.signalInputs.map((p) => _buildSignalPort(context, ref, p, true)),
+                      if (node.signalInputs.isNotEmpty) const Divider(height: 8),
+                      // 物料输入端口
+                      ...node.inputs.map((i) => _buildInputPort(context, ref, i)).toList()
+                    ]
                   ),
                 ),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.end, 
-                    children: node.outputs.map((o) => _buildOutputPort(context, ref, o)).toList()
+                    children: [
+                      // 信号输出端口
+                      if (node.signalOutputs.isNotEmpty) ...node.signalOutputs.map((p) => _buildSignalPort(context, ref, p, false)),
+                      if (node.signalOutputs.isNotEmpty) const Divider(height: 8),
+                      // 物料输出端口
+                      ...node.outputs.map((o) => _buildOutputPort(context, ref, o)).toList()
+                    ]
                   ),
                 ),
               ],
@@ -298,6 +268,7 @@ class NodeWidget extends ConsumerWidget {
             behavior: HitTestBehavior.opaque,
             onTap: () {
               if (node.stackCount > 1) {
+                // 使用 updateNodeComplete 方法更新节点
                 ref.read(canvasProvider.notifier).updateNodeComplete(node.id, node.copyWith(stackCount: node.stackCount - 1));
               }
             },
@@ -310,6 +281,7 @@ class NodeWidget extends ConsumerWidget {
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () {
+              // 使用 updateNodeComplete 方法更新节点
               ref.read(canvasProvider.notifier).updateNodeComplete(node.id, node.copyWith(stackCount: node.stackCount + 1));
             },
             child: const Padding(padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8), child: Icon(Icons.add, color: Colors.white, size: 16)),
@@ -326,12 +298,15 @@ class NodeWidget extends ConsumerWidget {
       position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx + 1, position.dy + 1),
       items: const[
         PopupMenuItem(value: 'edit', child: Text('编辑节点属性')),
+        PopupMenuItem(value: 'copy', child: Text('复制节点信息')),
         PopupMenuItem(value: 'delete', child: Text('删除该节点', style: TextStyle(color: Colors.red))),
       ],
     );
 
     if (result == 'edit' && context.mounted) {
       _showEditDialog(context, ref);
+    } else if (result == 'copy') {
+      _copyNodeInfoToClipboard(context);
     } else if (result == 'delete') {
       // 使用完整ID删除节点
       ref.read(canvasProvider.notifier).removeNode(node.id);
@@ -344,6 +319,83 @@ class NodeWidget extends ConsumerWidget {
       context: context,
       builder: (ctx) => NodeEditDialog(nodeId: node.id),
     );
+  }
+
+  /// 复制节点信息到剪贴板
+  void _copyNodeInfoToClipboard(BuildContext context) async {
+    // 构建节点信息字符串
+    StringBuffer buffer = StringBuffer();
+    buffer.writeln('节点名称: ${node.name}');
+    buffer.writeln('节点ID: ${node.id}');
+    buffer.writeln('节点类型: ${node.category.displayName}');
+    buffer.writeln('位置: (${node.position.dx}, ${node.position.dy})');
+    buffer.writeln('状态: ${node.status.label}');
+    buffer.writeln('是否已建设: ${node.isBuilt ? '是' : '否'}');
+    buffer.writeln('是否运行: ${node.isRunning ? '是' : '否'}');
+    buffer.writeln('堆叠数量: ${node.stackCount}');
+    buffer.writeln('最大容量: ${node.maxCapacity}');
+    buffer.writeln('进度: ${(node.progress * 100).toStringAsFixed(2)}%');
+    
+    // 添加输入端口信息
+    if (node.inputs.isNotEmpty) {
+      buffer.writeln('\n输入端口:');
+      for (var input in node.inputs) {
+        double inv = node.inputInventory[input.id] ?? 0.0;
+        buffer.writeln('  - ${input.itemName}: ${input.rate}${input.unit}/s (库存: ${inv.toStringAsFixed(2)}${input.unit})');
+      }
+    }
+    
+    // 添加输出端口信息
+    if (node.outputs.isNotEmpty) {
+      buffer.writeln('\n输出端口:');
+      for (var output in node.outputs) {
+        double inv = node.outputInventory[output.id] ?? 0.0;
+        String type = output.isPollutant ? ' (污染物)' : (output.isConstructionMaterial ? ' (建设资源)' : '');
+        buffer.writeln('  - ${output.itemName}: ${output.rate}${output.unit}/s (库存: ${inv.toStringAsFixed(2)}${output.unit})$type');
+      }
+    }
+    
+    // 添加信号端口信息
+    if (node.signalInputs.isNotEmpty || node.signalOutputs.isNotEmpty) {
+      buffer.writeln('\n信号端口:');
+      for (var input in node.signalInputs) {
+        buffer.writeln('  - 输入: ${input.name} (${input.type.name}) = ${input.value} (行为: ${input.inBehavior.name})');
+      }
+      for (var output in node.signalOutputs) {
+        buffer.writeln('  - 输出: ${output.name} (${output.type.name}) = ${output.value} (行为: ${output.outBehavior.name})');
+      }
+    }
+    
+    // 添加建设成本信息
+    if (node.constructionCost.isNotEmpty) {
+      buffer.writeln('\n建设成本:');
+      for (var entry in node.constructionCost.entries) {
+        buffer.writeln('  - ${entry.key}: ${entry.value}');
+      }
+    }
+    
+    // 添加逻辑控制信息
+    if (node.category == ProcessCategory.control) {
+      buffer.writeln('\n逻辑控制:');
+      buffer.writeln('  - 目标节点: ${node.logicTargetNodeId ?? '未设置'}');
+      buffer.writeln('  - 控制指令: ${node.logicAction ?? '未设置'}');
+      buffer.writeln('  - 逻辑算子: ${node.logicOp.displayName}');
+    }
+    
+    try {
+      await Clipboard.setData(ClipboardData(text: buffer.toString()));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('节点信息已复制到剪贴板')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('复制失败: $e')),
+        );
+      }
+    }
   }
 
   // 在 NodeWidget 中新增库存干预菜单方法
@@ -379,14 +431,17 @@ class NodeWidget extends ConsumerWidget {
 
   Widget _buildInputPort(BuildContext context, WidgetRef ref, InputPort port) {
     double inv = node.inputInventory[port.id] ?? 0.0;
+    print("InputPort - Name: ${port.itemName}, Rate: ${port.rate}, Unit: ${port.unit}, ID: ${port.id}"); // 调试日志
     // 接收连线的 DragTarget
     return DragTarget<String>(
       onAccept: (sourcePortData) {
+        print("InputPort onAccept - sourcePortData: $sourcePortData, target port ID: ${port.id}"); // 调试日志
         // sourcePortData 格式为 "nodeId:portId"
-        ref.read(canvasProvider.notifier).finalizeConnection(node.id, port.id);
+        ref.read(canvasProvider.notifier).finalizeConnection(node.id, port.id, DragType.material);
       },
       builder: (context, candidateData, rejectedData) {
         bool isHovered = candidateData.isNotEmpty;
+        print("InputPort builder - candidateData: $candidateData, port ID: ${port.id}"); // 调试日志
         return Container(
           margin: const EdgeInsets.only(bottom: 8),
           padding: const EdgeInsets.only(left: 0),
@@ -399,7 +454,7 @@ class NodeWidget extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children:[
                     Text(
-                      "${port.itemName} (${port.rate}/${port.unit}/s)",
+                      "${port.itemName} (${port.rate}${port.unit}/s)",
                       style: TextStyle(fontSize: 11, color: Theme.of(context).textTheme.bodyMedium?.color),
                     ),
                     GestureDetector(
@@ -426,44 +481,123 @@ class NodeWidget extends ConsumerWidget {
     );
   }
 
-  // [更新] 构建信号端口
   Widget _buildSignalPort(BuildContext context, WidgetRef ref, SignalPort port, bool isInput) {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (!isInput) Text(port.value.toStringAsFixed(1), style: const TextStyle(fontSize: 8, color: Colors.amber)),
-          const SizedBox(width: 4),
-          Draggable<String>(
-            data: "SIG:${node.id}:${port.id}", // 增加 SIG 前缀区分
-            feedback: Container(width: 12, height: 12, color: Colors.amber),
-            child: DragTarget<String>(
-              onAccept: (data) {
-                if (data.startsWith("SIG:")) {
-                  ref.read(canvasProvider.notifier).finalizeSignalConnection(node.id, port.id);
-                }
-              },
-              builder: (context, candidate, _) => Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: port.type == SignalType.digital ? Colors.amber : Colors.purple,
-                  borderRadius: BorderRadius.circular(2), // 方形端口
-                  border: Border.all(color: Colors.black, width: 1),
+    final bool isDigital = port.type == SignalType.digital;
+    final Color portColor = isDigital ? Colors.cyanAccent : Colors.purpleAccent;
+    final IconData portIcon = isDigital ? Icons.stop : Icons.change_history;
+    final DragType expectedDragType = isDigital ? DragType.signalDigital : DragType.signalAnalog;
+
+    if (isInput) {
+      // --- 信号输入端对齐物料输入端 UI 架构 ---
+      return DragTarget<String>(
+        onWillAccept: (data) {
+          final currentDragType = ref.read(canvasProvider).activeDragType;
+          final canAccept = currentDragType == expectedDragType;
+          if (canAccept) {
+            ref.read(canvasProvider.notifier).setConnectionHoverValid(true);
+          }
+          return canAccept;
+        },
+        onLeave: (_) {
+          ref.read(canvasProvider.notifier).setConnectionHoverValid(false);
+        },
+        onAccept: (data) {
+          ref.read(canvasProvider.notifier).finalizeConnection(node.id, port.id, expectedDragType);
+        },
+        builder: (ctx, candidate, _) {
+          bool isHovered = candidate.isNotEmpty;
+          return Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                Icon(portIcon, size: 16, color: isHovered ? Colors.greenAccent : portColor),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "${port.name} (${isDigital ? '数字' : '模拟'})",
+                        style: TextStyle(fontSize: 11, color: Theme.of(context).textTheme.bodyMedium?.color),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                        decoration: BoxDecoration(
+                          color: portColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4)
+                        ),
+                        child: Text(
+                          "值: ${port.value.toStringAsFixed(1)}",
+                          style: TextStyle(fontSize: 10, color: portColor),
+                        ),
+                      )
+                    ],
+                  ),
                 ),
+              ],
+            ),
+          );
+        },
+      );
+    } else {
+      // --- 信号输出端对齐物料输出端 UI 架构 ---
+      return Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  "${port.name} (${isDigital ? '数字' : '模拟'})",
+                  style: TextStyle(fontSize: 11, color: Theme.of(context).textTheme.bodyMedium?.color),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                  decoration: BoxDecoration(
+                    color: portColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(4)
+                  ),
+                  child: Text(
+                    "值: ${port.value.toStringAsFixed(1)}",
+                    style: TextStyle(fontSize: 10, color: portColor),
+                  ),
+                )
+              ],
+            ),
+            const SizedBox(width: 4),
+            Draggable<String>(
+              data: "${node.id}:${port.id}",
+              feedback: Icon(portIcon, size: 16, color: portColor.withOpacity(0.8)),
+              childWhenDragging: Icon(portIcon, size: 16, color: Colors.grey),
+              onDragStarted: () {
+                ref.read(canvasProvider.notifier).startConnectionDrag(node.id, port.id, expectedDragType);
+              },
+              onDragUpdate: (details) {
+                final RenderBox renderBox = context.findRenderObject() as RenderBox;
+                Offset localPosition = renderBox.globalToLocal(details.globalPosition);
+                Offset canvasPosition = node.position + localPosition;
+                ref.read(canvasProvider.notifier).updateConnectionDrag(canvasPosition);
+              },
+              onDragEnd: (details) => ref.read(canvasProvider.notifier).endConnectionDrag(),
+              onDraggableCanceled: (velocity, offset) => ref.read(canvasProvider.notifier).cancelConnectionDrag(),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.grab,
+                child: Icon(portIcon, size: 16, color: portColor),
               ),
             ),
-          ),
-          const SizedBox(width: 4),
-          if (isInput) Text(port.name, style: const TextStyle(fontSize: 9, color: Colors.amber)),
-        ],
-      ),
-    );
+          ],
+        ),
+      );
+    }
   }
 
   Widget _buildOutputPort(BuildContext context, WidgetRef ref, OutputPort port) {
     double inv = node.outputInventory[port.id] ?? 0.0;
+    print("OutputPort - Name: ${port.itemName}, Rate: ${port.rate}, Unit: ${port.unit}, ID: ${port.id}, isPollutant: ${port.isPollutant}"); // 调试日志
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children:[
@@ -476,7 +610,7 @@ class NodeWidget extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children:[
                   Text(
-                    "${port.itemName} (${port.rate}/${port.unit}/s)", 
+                    "${port.itemName} (${port.rate}${port.unit}/s)", 
                     style: TextStyle(
                       fontSize: 11,
                       color: port.isConstructionMaterial 
@@ -510,7 +644,8 @@ class NodeWidget extends ConsumerWidget {
                 
                 // 拖拽生命周期挂载
                 onDragStarted: () {
-                  ref.read(canvasProvider.notifier).startConnectionDrag(node.id, port.id);
+                  print("OutputPort drag started - node ID: ${node.id}, port ID: ${port.id}"); // 调试日志
+                  ref.read(canvasProvider.notifier).startConnectionDrag(node.id, port.id, DragType.material);
                 },
                 onDragUpdate: (details) {
                   // 获取当前画板的 RenderBox (需要为 CustomPaint 区域绑定 GlobalKey，或通过 context 向上查找)
@@ -530,9 +665,13 @@ class NodeWidget extends ConsumerWidget {
                   ref.read(canvasProvider.notifier).updateConnectionDrag(canvasPosition);
                 },
                 onDragEnd: (details) {
-                  // 释放时无论是否命中目标，均清理拖拽状态
-                  ref.read(canvasProvider.notifier).endConnectionDrag();
-                },
+                // 【修复 2】: 释放时清理拖拽状态，防止 Ghost Line 残留
+                ref.read(canvasProvider.notifier).endConnectionDrag();
+              },
+              onDraggableCanceled: (velocity, offset) {
+                // 当拖拽被取消时，也清除拖拽状态
+                ref.read(canvasProvider.notifier).cancelConnectionDrag();
+              },
                 
                 // 默认静态图标
                 child: MouseRegion(
@@ -571,6 +710,175 @@ class NodeWidget extends ConsumerWidget {
             ),
           )
       ],
+    );
+  }
+
+  // [新增] 逻辑卡片独立调试面板
+  // 完整替换原有 if (node.category == ProcessCategory.control) 区域
+  Widget _buildLogicDebugPanel(BuildContext context) {
+    if (node.category != ProcessCategory.control) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.blueAccent.withOpacity(0.08),
+        border: Border.all(color: Colors.blueAccent.withOpacity(0.3), width: 1),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 面板标题栏（含展开/折叠控制）
+          InkWell(
+            onTap: () => setState(() => _logicPanelExpanded = !_logicPanelExpanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.memory, size: 14, color: Colors.blueAccent),
+                  const SizedBox(width: 4),
+                  Text(
+                    '逻辑算子: ${node.logicOp.displayName}',
+                    style: const TextStyle(fontSize: 11, color: Colors.blueAccent, fontWeight: FontWeight.bold),
+                  ),
+                  const Spacer(),
+                  // 快速切换算子按钮
+                  PopupMenuButton<LogicOperator>(
+                    padding: EdgeInsets.zero,
+                    iconSize: 14,
+                    tooltip: '切换算子',
+                    onSelected: (op) {
+                      ref.read(canvasProvider.notifier).updateNodeComplete(
+                        node.id, node.copyWith(logicOp: op),
+                      );
+                    },
+                    itemBuilder: (_) => LogicOperator.values.map((op) =>
+                      PopupMenuItem(value: op, child: Text(op.displayName, style: const TextStyle(fontSize: 12))),
+                    ).toList(),
+                    child: const Icon(Icons.tune, size: 14, color: Colors.blueAccent),
+                  ),
+                  Icon(
+                    _logicPanelExpanded ? Icons.expand_less : Icons.expand_more,
+                    size: 14,
+                    color: Colors.blueAccent,
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // 展开内容区
+          if (_logicPanelExpanded) ...[
+            const Divider(height: 1, thickness: 1),
+            Padding(
+              padding: const EdgeInsets.all(6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 信号输入端口实时状态显示
+                  if (node.signalInputs.isNotEmpty) ...[
+                    const Text('信号输入', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                    ...node.signalInputs.asMap().entries.map((e) {
+                      final idx = e.key;
+                      final port = e.value;
+                      final label = idx == 0 ? 'IN A' : (idx == 1 ? 'IN B' : 'IN${idx}');
+                      final isDigital = port.type == SignalType.digital;
+                      return _buildSignalValueRow(
+                        label: label,
+                        port: port,
+                        isInput: true,
+                        color: isDigital ? Colors.cyanAccent : Colors.purpleAccent,
+                      );
+                    }),
+                    const SizedBox(height: 4),
+                  ],
+
+                  // 信号输出端口实时状态显示
+                  if (node.signalOutputs.isNotEmpty) ...[
+                    const Text('信号输出', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                    ...node.signalOutputs.asMap().entries.map((e) {
+                      final idx = e.key;
+                      final port = e.value;
+                      final label = 'OUT${idx}';
+                      final isDigital = port.type == SignalType.digital;
+                      return _buildSignalValueRow(
+                        label: label,
+                        port: port,
+                        isInput: false,
+                        color: isDigital ? Colors.cyanAccent : Colors.purpleAccent,
+                      );
+                    }),
+                    const SizedBox(height: 4),
+                  ],
+
+                  // 目标绑定信息（简要）
+                  Row(
+                    children: [
+                      const Icon(Icons.link, size: 12, color: Colors.blueGrey),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          '目标: ${node.logicTargetNodeId != null ? node.logicTargetNodeId!.substring(0, min(8, node.logicTargetNodeId!.length)) : "未绑定"}  指令: ${node.logicAction ?? "—"}',
+                          style: const TextStyle(fontSize: 10, color: Colors.blueGrey),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  // Latch 寄存器状态
+                  if (node.logicOp == LogicOperator.latch && node.registers.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Q = ${node.registers['q']?.toStringAsFixed(1) ?? '0.0'}',
+                        style: const TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // [新增] 信号端口单行状态显示组件（含实时值与行为标签）
+  Widget _buildSignalValueRow({
+    required String label,
+    required SignalPort port,
+    required bool isInput,
+    required Color color,
+  }) {
+    final bool isDigital = port.type == SignalType.digital;
+    // 数字信号：显示 0/1 状态灯；模拟信号：显示数值
+    final String valueStr = isDigital
+        ? (port.value > 0.5 ? '● 1' : '○ 0')
+        : port.value.toStringAsFixed(2);
+    final String behaviorStr = isInput
+        ? (port.inBehavior != SignalInputBehavior.none ? port.inBehavior.label.split('(').first.trim() : '')
+        : (port.outBehavior != SignalOutputBehavior.none ? port.outBehavior.label.split('(').first.trim() : '');
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Row(
+        children: [
+          Text(label, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.bold)),
+          const SizedBox(width: 6),
+          Text(valueStr, style: TextStyle(fontSize: 11, color: color)),
+          if (behaviorStr.isNotEmpty) ...[
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                behaviorStr,
+                style: const TextStyle(fontSize: 9, color: Colors.grey),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
