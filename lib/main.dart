@@ -6,7 +6,6 @@ import 'package:collection/collection.dart'; // 用于 firstWhereOrNull
 import 'models.dart';
 import 'providers.dart';
 import 'node_widget.dart'; // 见后文
-import 'api_server.dart'; // [新增] 导入接口服务模块
 
 void main() {
   runApp(const ProviderScope(child: IndustrialSimulatorApp()));
@@ -42,9 +41,6 @@ class CanvasScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // [Init] 注册并监听本地 API 服务网关，使其伴随主 UI 进程启动并常驻
-    ref.watch(apiServerProvider);
-    
     final canvasState = ref.watch(canvasProvider);
 
     return Scaffold(
