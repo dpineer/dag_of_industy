@@ -589,25 +589,33 @@ class CanvasNotifier extends Notifier<CanvasState> {
       type: sourceIsSignal ? ConnectionType.signal : ConnectionType.material,
     );
 
-    // 发送至后端验证是否符合割公理及线性逻辑约束
+    // [核心修复]: 乐观 UI 更新。先在前端完成拓扑注入，响应用户手势，再异步通报后端。
+    state = state.copyWith(
+      connections: [...state.connections, newConn],
+      clearDrag: true,
+    );
+
+    // 异步同步至线性逻辑推演后端 (防呆：如果后端崩溃，图表依然可编辑)
     try {
       final res = await http.post(
         Uri.parse('$BACKEND_URL/api/structs/manual'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(newConn.toJson()),
-      );
-      if (jsonDecode(res.body)['status'] == 'verified') {
-        state = state.copyWith(
-          connections: [...state.connections, newConn],
-          clearDrag: true,
-        );
-      } else {
-        // 违背逻辑，拒绝连接
-        endConnectionDrag();
+      ).timeout(const Duration(seconds: 2)); // 设定短超时防止线程挂起
+
+      if (jsonDecode(res.body)['status'] != 'verified') {
+        // 后端拒绝 (例如违背线性逻辑的收缩原则)，在此处执行本地状态回滚
+        _rollbackConnection(newConn.id);
       }
     } catch (e) {
-      endConnectionDrag();
+      print("⚠️ [网络层警告] 无法连接到逻辑求解器，回退至沙盒本地模式: $e");
     }
+  }
+
+  void _rollbackConnection(String connId) {
+    state = state.copyWith(
+      connections: state.connections.where((c) => c.id != connId).toList()
+    );
   }
 
   // 添加一个方法来处理拖拽取消

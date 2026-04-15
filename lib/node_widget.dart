@@ -434,6 +434,17 @@ class _NodeWidgetState extends ConsumerState<NodeWidget> {
     print("InputPort - Name: ${port.itemName}, Rate: ${port.rate}, Unit: ${port.unit}, ID: ${port.id}"); // 调试日志
     // 接收连线的 DragTarget
     return DragTarget<String>(
+      onWillAccept: (data) {
+        final currentDragType = ref.read(canvasProvider).activeDragType;
+        final canAccept = currentDragType == DragType.material;
+        if (canAccept) {
+          ref.read(canvasProvider.notifier).setConnectionHoverValid(true);
+        }
+        return canAccept;
+      },
+      onLeave: (_) {
+        ref.read(canvasProvider.notifier).setConnectionHoverValid(false);
+      },
       onAccept: (sourcePortData) {
         print("InputPort onAccept - sourcePortData: $sourcePortData, target port ID: ${port.id}"); // 调试日志
         // sourcePortData 格式为 "nodeId:portId"

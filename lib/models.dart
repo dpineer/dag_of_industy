@@ -140,7 +140,7 @@ enum ProcessCategory {
 
 abstract class Port {
   final String id;
-  final String itemName;
+  final String itemName; // 用户视角的资源 ID (语义标签)
   final double rate;
   final double unitCost;
   final String unit; 
@@ -151,7 +151,7 @@ abstract class Port {
     this.rate = 1.0,
     this.unitCost = 0.0,
     this.unit = 'kg', 
-  }) : id = id ?? itemName; // [Fix] 资源名称就是资源的ID，统一全系统物料标定标准
+  }) : id = id ?? _uuid.v4(); // [核心修复] 强制使用 UUID，彻底解除拓扑标识与业务名称的耦合
 
   Map<String, dynamic> toJson();
 }
@@ -168,9 +168,9 @@ class InputPort extends Port {
     this.isRequired = true,
   });
 
-  InputPort copyWith({String? itemName, double? rate, double? unitCost, String? unit, bool? isRequired}) {
+  InputPort copyWith({String? id, String? itemName, double? rate, double? unitCost, String? unit, bool? isRequired}) {
     return InputPort(
-      id: id,
+      id: id ?? this.id,
       itemName: itemName ?? this.itemName,
       rate: rate ?? this.rate,
       unitCost: unitCost ?? this.unitCost,
@@ -185,7 +185,12 @@ class InputPort extends Port {
   };
   
   factory InputPort.fromJson(Map<String, dynamic> json) => InputPort(
-    id: json['id'], itemName: json['itemName'], rate: json['rate'], unitCost: json['unitCost'], unit: json['unit'] ?? 'kg', isRequired: json['isRequired'] ?? true,
+    id: json['id'] ?? _uuid.v4(), // 兼容旧数据
+    itemName: json['itemName'] ?? 'Unknown', 
+    rate: json['rate']?.toDouble() ?? 1.0, 
+    unitCost: json['unitCost']?.toDouble() ?? 0.0, 
+    unit: json['unit'] ?? 'kg', 
+    isRequired: json['isRequired'] ?? true,
   );
 }
 
@@ -205,9 +210,9 @@ class OutputPort extends Port {
     this.isConstructionMaterial = false, // [新增] 默认不是建设资源
   });
 
-  OutputPort copyWith({String? itemName, double? rate, double? unitCost, String? unit, bool? isPollutant, bool? isDiscarded, bool? isConstructionMaterial}) {
+  OutputPort copyWith({String? id, String? itemName, double? rate, double? unitCost, String? unit, bool? isPollutant, bool? isDiscarded, bool? isConstructionMaterial}) {
     return OutputPort(
-      id: id,
+      id: id ?? this.id,
       itemName: itemName ?? this.itemName,
       rate: rate ?? this.rate,
       unitCost: unitCost ?? this.unitCost,
@@ -224,7 +229,14 @@ class OutputPort extends Port {
   };
   
   factory OutputPort.fromJson(Map<String, dynamic> json) => OutputPort(
-    id: json['id'], itemName: json['itemName'], rate: json['rate'], unitCost: json['unitCost'], unit: json['unit'] ?? 'kg', isPollutant: json['isPollutant'] ?? false, isDiscarded: json['isDiscarded'] ?? false, isConstructionMaterial: json['isConstructionMaterial'] ?? false,
+    id: json['id'] ?? _uuid.v4(), // 兼容旧数据
+    itemName: json['itemName'] ?? 'Unknown', 
+    rate: json['rate']?.toDouble() ?? 1.0, 
+    unitCost: json['unitCost']?.toDouble() ?? 0.0, 
+    unit: json['unit'] ?? 'kg', 
+    isPollutant: json['isPollutant'] ?? false, 
+    isDiscarded: json['isDiscarded'] ?? false, 
+    isConstructionMaterial: json['isConstructionMaterial'] ?? false,
   );
 }
 

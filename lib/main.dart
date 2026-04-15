@@ -100,6 +100,11 @@ class CanvasScreen extends ConsumerWidget {
             onPressed: () => _runSimulationAndShowChart(context, ref),
           ),
           IconButton(
+            icon: const Icon(Icons.waves, color: Colors.cyan),
+            tooltip: '宏观物质流 (桑基图)',
+            onPressed: () => _showSankeyDiagram(context, ref),
+          ),
+          IconButton(
             icon: const Icon(Icons.download),
             tooltip: '导出配置',
             onPressed: () async {
