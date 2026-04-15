@@ -1,0 +1,14 @@
+/mnt/source_disk/Project/MyPrj/A_Persional_II/dag_of_industy/backend/target/release/deps/serde-b841fc7952432849.d: /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /mnt/source_disk/Project/MyPrj/A_Persional_II/dag_of_industy/backend/target/release/build/serde-5e5ad418d43d343c/out/private.rs
+
+/mnt/source_disk/Project/MyPrj/A_Persional_II/dag_of_industy/backend/target/release/deps/libserde-b841fc7952432849.rlib: /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /mnt/source_disk/Project/MyPrj/A_Persional_II/dag_of_industy/backend/target/release/build/serde-5e5ad418d43d343c/out/private.rs
+
+/mnt/source_disk/Project/MyPrj/A_Persional_II/dag_of_industy/backend/target/release/deps/libserde-b841fc7952432849.rmeta: /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /mnt/source_disk/Project/MyPrj/A_Persional_II/dag_of_industy/backend/target/release/build/serde-5e5ad418d43d343c/out/private.rs
+
+/home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/dpiner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/mnt/source_disk/Project/MyPrj/A_Persional_II/dag_of_industy/backend/target/release/build/serde-5e5ad418d43d343c/out/private.rs:
+
+# env-dep:OUT_DIR=/mnt/source_disk/Project/MyPrj/A_Persional_II/dag_of_industy/backend/target/release/build/serde-5e5ad418d43d343c/out
